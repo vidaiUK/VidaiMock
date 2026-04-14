@@ -55,6 +55,7 @@ Plus: Tool calling (OpenAI `tool_calls` + Anthropic `tool_use` + Gemini `functio
 - **🌊 Physics-Accurate Streaming**: Realistic TTFT and token-by-token delivery with **provider-native streaming payloads** (OpenAI SSE, Responses API typed events, Anthropic EventStream, Gemini, etc.)
 - **⚡ High Performance**: 50,000+ RPS in benchmark mode
 - **🎛️ Chaos & Error Testing**: Inject failures, latency, malformed responses, and **custom HTTP status codes** (400, 401, 404, 429, 500, etc.) for error path testing
+- **🏢 Multi-Tenant**: Isolate teams or CI pipelines on one mock instance with per-tenant latency/chaos overrides and optional PSK authentication
 - **🧠 Smart Response Branching**: Templates auto-detect tool calls (OpenAI `tool_calls`, Anthropic `tool_use`, Gemini `functionCall`), reasoning models (o-series), structured output, and respond with the correct shape
 - **🎯 Per-Request Overrides**: `X-Mock-Status` header returns any HTTP status on any endpoint — test error paths on real provider routes without path rewriting
 - **📝 Customizable**: YAML configs + Tera templates for any API
@@ -281,6 +282,153 @@ stream:
 **`status_code`** accepts static values (`"400"`) or Tera expressions (`"{{ path_segments | last }}"`) for dynamic HTTP status codes. The bundled `/error/{code}` endpoint uses this to simulate any error.
 
 **`frame_format: raw`** gives the template full control over SSE framing — essential for providers like OpenAI's Responses API that use typed `event:` lines.
+
+## 🏢 Multi-Tenant Support
+
+A single VidaiMock instance can serve multiple isolated teams or CI pipelines simultaneously. Each **tenant** gets its own identity, optional authentication, and independent latency/chaos settings that fully override the global defaults.
+
+### How It Works
+
+Every incoming request is inspected by the `extract_tenant` middleware before it reaches a handler:
+
+1. If there is no `X-Tenant-ID` header the request is treated as **anonymous** and the global `[latency]` / `[chaos]` settings apply.
+2. If the header is present but matches no configured tenant, the request falls through to the anonymous defaults (the mock stays open by design).
+3. If the tenant is found and has **no** `api_key` configured, the request is accepted on name alone (low-friction dev / CI mode).
+4. If the tenant has an `api_key`, the caller must supply a matching `X-Tenant-Key` header — a mismatch returns **HTTP 401** without leaking which tenant was requested.
+
+### Configuration (`mock-server.toml`)
+
+Add one `[[tenants]]` block per tenant. No restart is needed beyond editing the file and restarting the process (or sending `SIGHUP` if your OS supports it).
+
+```toml
+# ── Tenant: Team A ──────────────────────────────────────────────────────────
+[[tenants]]
+id = "team-a"
+api_key = "sk-mock-team-a-abc123"   # omit to accept any request for this ID
+
+[tenants.latency]
+mode = "realistic"
+base_ms = 200
+jitter_pct = 0.1
+
+[tenants.chaos]
+drop_pct = 5.0        # 5 % of requests return HTTP 500
+malformed_pct = 2.0   # 2 % of responses are deliberately malformed JSON
+
+# ── Tenant: CI Pipeline (no auth, zero latency) ──────────────────────────────
+[[tenants]]
+id = "ci-pipeline"
+# No api_key — any caller claiming this ID is accepted
+
+[tenants.latency]
+mode = "benchmark"
+base_ms = 0
+jitter_pct = 0.0
+```
+
+#### Tenant lifecycle
+
+| Action | How |
+|--------|-----|
+| **Create** | Add a `[[tenants]]` block and restart |
+| **Modify** | Edit the block and restart |
+| **Delete** | Remove the block and restart |
+
+### Runtime Headers
+
+| Header | Purpose |
+|--------|---------|
+| `X-Tenant-ID: <id>` | Identify the tenant for this request |
+| `X-Tenant-Key: <key>` | Authenticate (required only when the tenant has `api_key` set) |
+
+Per-tenant `X-Vidai-*` chaos/latency overrides (see [Runtime Headers](#runtime-headers-1) above) can still be applied on top of tenant-level settings.
+
+### Per-Tenant Overrides
+
+The `[tenants.latency]` and `[tenants.chaos]` blocks accept exactly the same fields as the top-level `[latency]` and `[chaos]` sections. When a tenant block is present it completely replaces the global setting for that tenant; when it is absent the global setting is used.
+
+```toml
+[tenants.chaos]
+drop_pct        = 10.0   # % of requests that return HTTP 500
+malformed_pct   = 5.0    # % of responses with deliberately broken JSON
+trickle_ms      = 50     # extra per-chunk delay during streaming (ms)
+disconnect_pct  = 3.0    # % of streaming responses that cut off mid-stream
+```
+
+### Secrets via Environment Variables
+
+`api_key` values can be supplied through environment variables instead of plain text in the TOML file:
+
+```bash
+# Index corresponds to the position of the [[tenants]] block (0-based)
+export VIDAIMOCK_TENANTS__0__API_KEY=sk-mock-team-a-abc123
+export VIDAIMOCK_TENANTS__1__API_KEY=sk-mock-team-b-xyz789
+```
+
+### `/status` and Security
+
+The `api_key` field is **never** serialized to JSON. Calling `GET /status` returns tenant IDs and their latency/chaos settings but never exposes any secret keys.
+
+### Observability
+
+#### Prometheus Metrics (`GET /metrics`)
+
+Every request is counted and timed with a `tenant` label:
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `http_requests_total` | Counter | `method`, `path`, `status`, **`tenant`** |
+| `http_request_duration_seconds` | Histogram | `method`, `path`, **`tenant`** |
+
+The `tenant` label is set to the raw value of the `X-Tenant-ID` header, or `"anonymous"` when the header is absent. This lets you build per-team dashboards and alerts directly in Prometheus/Grafana without any additional instrumentation.
+
+```promql
+# Total requests per tenant over the last 5 minutes
+sum by (tenant) (rate(http_requests_total[5m]))
+
+# 95th-percentile latency per tenant
+histogram_quantile(0.95, sum by (tenant, le) (rate(http_request_duration_seconds_bucket[5m])))
+```
+
+#### Structured Logs / Tracing
+
+Every request span is emitted with a `tenant_id` field (value: the resolved tenant ID or `"anonymous"`). When running with a structured-log backend (e.g. `RUST_LOG=info`) all log lines for a request automatically carry this field:
+
+```
+INFO request{tenant_id="team-a"}: mock response sent in 23ms
+INFO request{tenant_id="anonymous"}: mock response sent in 1ms
+```
+
+This makes per-tenant log filtering trivial with any log aggregation tool (Datadog, Loki, CloudWatch, etc.).
+
+### Quick Example
+
+```bash
+# Start mock with tenant config in mock-server.toml
+./vidaimock
+
+# Request as Team A (with auth)
+curl http://localhost:8100/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-ID: team-a" \
+  -H "X-Tenant-Key: sk-mock-team-a-abc123" \
+  -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hi"}]}'
+
+# Request as CI pipeline (no auth required)
+curl http://localhost:8100/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-ID: ci-pipeline" \
+  -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hi"}]}'
+
+# Wrong key → 401
+curl http://localhost:8100/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-ID: team-a" \
+  -H "X-Tenant-Key: wrong-key" \
+  -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hi"}]}'
+```
+
+---
 
 ## 📄 License
 

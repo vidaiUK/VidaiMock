@@ -34,7 +34,7 @@ use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use rand::Rng;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, TenantContext};
 // use crate::formats::load_response; // Function removed/unused
 
 #[derive(Clone)]
@@ -43,10 +43,12 @@ pub struct AppState {
     pub registry: Arc<crate::provider::ProviderRegistry>,
 }
 
-/// Apply configured latency delay for realistic simulation mode
-async fn apply_latency(config: &AppConfig, headers: &HeaderMap) {
-    let mut base = config.latency.base_ms;
-    let mut jitter_pct = config.latency.jitter_pct;
+/// Apply configured latency delay for realistic simulation mode.
+/// Per-tenant latency settings take precedence over the global config.
+async fn apply_latency(config: &AppConfig, headers: &HeaderMap, tenant: &TenantContext) {
+    let effective = tenant.effective_latency(&config.latency);
+    let mut base = effective.base_ms;
+    let mut jitter_pct = effective.jitter_pct;
 
     // Header Overrides
     if let Some(val) = headers.get("x-vidai-latency") {
@@ -73,9 +75,11 @@ async fn apply_latency(config: &AppConfig, headers: &HeaderMap) {
 }
 
 /// Checks for chaos overrides and returns an error response if chaos triggers.
-fn check_chaos_failure(config: &AppConfig, headers: &HeaderMap) -> Option<Response> {
-    let mut drop_pct = config.chaos.drop_pct;
-    let mut malformed_pct = config.chaos.malformed_pct;
+/// Per-tenant chaos settings take precedence over the global config.
+fn check_chaos_failure(config: &AppConfig, headers: &HeaderMap, tenant: &TenantContext) -> Option<Response> {
+    let effective = tenant.effective_chaos(&config.chaos);
+    let mut drop_pct = effective.drop_pct;
+    let mut malformed_pct = effective.malformed_pct;
 
     // Header Overrides
     if let Some(val) = headers.get("x-vidai-chaos-drop") {
@@ -154,20 +158,17 @@ pub async fn status_handler(
 
 pub async fn mock_handler(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(tenant_ctx): Extension<TenantContext>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
     Query(query_params): Query<HashMap<String, String>>,
     Json(request_json): Json<Value>,
 ) -> impl IntoResponse {
     // Apply latency simulation (with header override support)
-    apply_latency(&state.config, &headers).await;
+    apply_latency(&state.config, &headers, &tenant_ctx).await;
 
-    // Check for chaos failures (500s or Malformed)
-    if let Some(chaos_response) = check_chaos_failure(&state.config, &headers) {
-        return chaos_response.into_response();
-    }
-
-    // Check for streaming request
+    // Check for streaming request before chaos so that chaos is checked
+    // exactly once — in streaming_handler — for streaming paths.
     let is_streaming_path = uri.path().contains(":streamGenerateContent") 
         || uri.path().contains("/converse-stream") 
         || uri.path().contains("/invoke-with-response-stream")
@@ -176,11 +177,17 @@ pub async fn mock_handler(
     if is_streaming_path || request_json.get("stream").and_then(|v| v.as_bool()).unwrap_or(false) {
         return streaming_handler(
             Extension(state),
+            Extension(tenant_ctx),
             OriginalUri(uri),
             headers,
             Query(query_params),
             Json(request_json),
         ).await.into_response();
+    }
+
+    // Check for chaos failures (500s or Malformed) — non-streaming only.
+    if let Some(chaos_response) = check_chaos_failure(&state.config, &headers, &tenant_ctx) {
+        return chaos_response.into_response();
     }
 
     let path = uri.path();
@@ -252,10 +259,11 @@ pub async fn mock_handler(
 
 pub async fn models_handler(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(tenant_ctx): Extension<TenantContext>,
     OriginalUri(_uri): OriginalUri,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    apply_latency(&state.config, &headers).await;
+    apply_latency(&state.config, &headers, &tenant_ctx).await;
 
     let mut model_list = Vec::new();
     
@@ -292,11 +300,19 @@ pub async fn models_handler(
 
 pub async fn streaming_handler(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(tenant_ctx): Extension<TenantContext>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
     Query(query_params): Query<HashMap<String, String>>,
     Json(request_json): Json<Value>,
 ) -> Response {
+    // Check for chaos failures (drop / malformed) — applies whether this
+    // handler is reached directly via a registered stream route or via
+    // delegation from mock_handler.
+    if let Some(chaos_response) = check_chaos_failure(&state.config, &headers, &tenant_ctx) {
+        return chaos_response.into_response();
+    }
+
     let path = uri.path();
     
     // 1. Try to find provider
@@ -364,8 +380,9 @@ pub async fn streaming_handler(
             let encoding = stream_config.encoding.clone().unwrap_or_default(); // "aws-event-stream" or empty for SSE
             let is_raw_frame = stream_config.frame_format.as_deref() == Some("raw");
             
-            let mut trickle_ms = state.config.chaos.trickle_ms;
-            let mut disconnect_pct = state.config.chaos.disconnect_pct;
+            let effective_chaos = tenant_ctx.effective_chaos(&state.config.chaos);
+            let mut trickle_ms = effective_chaos.trickle_ms;
+            let mut disconnect_pct = effective_chaos.disconnect_pct;
 
             // Header Overrides for Streaming Chaos
             if let Some(val) = headers.get("x-vidai-chaos-trickle") {
@@ -614,11 +631,12 @@ fn extract_content_value(json_str: &str) -> (serde_json::Value, bool) {
 
 pub async fn echo_handler(
     Extension(state): Extension<Arc<AppState>>,
+    Extension(tenant_ctx): Extension<TenantContext>,
     headers: HeaderMap,
     body: Bytes
 ) -> Response {
     // Apply latency simulation (consistent with mock_handler)
-    apply_latency(&state.config, &headers).await;
+    apply_latency(&state.config, &headers, &tenant_ctx).await;
      
     let mut response = Response::new(axum::body::Body::from(body));
     response.headers_mut().insert(

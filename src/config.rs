@@ -38,6 +38,63 @@ pub struct AppConfig {
     pub endpoints: Vec<EndpointConfig>,
     #[serde(skip)]
     pub response_file: Option<PathBuf>,
+    /// Per-tenant overrides. Tenants are created/modified/deleted by editing
+    /// this list in `mock-server.toml` and restarting (or sending SIGHUP).
+    #[serde(default)]
+    pub tenants: Vec<TenantConfig>,
+}
+
+/// Per-tenant configuration block.
+///
+/// Lifecycle:
+/// - **Create**: add a `[[tenants]]` block to `mock-server.toml` and restart.
+/// - **Modify**: edit the block and restart.
+/// - **Delete**: remove the block and restart.
+///
+/// Authorization:
+/// - If `api_key` is absent the tenant is accepted on name alone (dev mode).
+/// - If `api_key` is set incoming requests must supply a matching
+///   `X-Tenant-Key` header; mismatches return 401 without leaking details.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TenantConfig {
+    pub id: String,
+    /// Optional pre-shared key for the tenant.
+    /// Deserialized from TOML but never serialized to JSON (e.g. `/status`).
+    #[serde(default, skip_serializing)]
+    pub api_key: Option<String>,
+    /// Optional per-tenant latency override (falls back to global when absent).
+    #[serde(default)]
+    pub latency: Option<LatencyConfig>,
+    /// Optional per-tenant chaos override (falls back to global when absent).
+    #[serde(default)]
+    pub chaos: Option<ChaosConfig>,
+}
+
+/// Resolved tenant identity injected as an Axum extension by `extract_tenant`.
+///
+/// Always present after the middleware runs:
+/// - All fields are `None` for anonymous (no `X-Tenant-ID` header) requests.
+#[derive(Clone, Debug, Default)]
+pub struct TenantContext {
+    /// The resolved tenant ID. Carried for use in metrics labels, tracing, and
+    /// future per-tenant observability.
+    pub id: Option<String>,
+    pub latency: Option<LatencyConfig>,
+    pub chaos: Option<ChaosConfig>,
+}
+
+impl TenantContext {
+    /// Returns the effective [`ChaosConfig`] for this request: the tenant's
+    /// own setting when present, otherwise the global `fallback`.
+    pub fn effective_chaos<'a>(&'a self, fallback: &'a ChaosConfig) -> &'a ChaosConfig {
+        self.chaos.as_ref().unwrap_or(fallback)
+    }
+
+    /// Returns the effective [`LatencyConfig`] for this request: the tenant's
+    /// own setting when present, otherwise the global `fallback`.
+    pub fn effective_latency<'a>(&'a self, fallback: &'a LatencyConfig) -> &'a LatencyConfig {
+        self.latency.as_ref().unwrap_or(fallback)
+    }
 }
 
 fn default_host() -> String {
@@ -164,6 +221,18 @@ impl AppConfig {
         
         config.response_file = args.response_file;
 
+        // Validate: duplicate tenant IDs would cause the second entry to be
+        // silently ignored by `.find()` in the middleware — catch this early.
+        let mut seen_ids = std::collections::HashSet::new();
+        for tenant in &config.tenants {
+            if !seen_ids.insert(tenant.id.as_str()) {
+                return Err(config::ConfigError::Message(format!(
+                    "duplicate tenant id '{}' in configuration; each tenant id must be unique",
+                    tenant.id
+                )));
+            }
+        }
+
         // If endpoints provided via CLI, we construct a simple config where all endpoints use the specified (or default "openai") format
         if let Some(cli_endpoints) = args.endpoints {
             let default_format = args.format.unwrap_or_else(|| "openai".to_string());
@@ -265,5 +334,93 @@ mod tests {
         assert_eq!(config.endpoints[0].format, "openai");
         assert_eq!(config.endpoints[1].path, "/v1/test");
         assert_eq!(config.endpoints[1].format, "echo");
+    }
+
+    #[test]
+    fn test_tenant_config_defaults_to_empty() {
+        let args = Cli::parse_from(&["mock-server"]);
+        let config = AppConfig::build_config(args).unwrap();
+        assert!(config.tenants.is_empty());
+    }
+
+    #[test]
+    fn test_tenant_config_deserialization() {
+        let toml_str = r#"
+port = 8100
+workers = 1
+log_level = "info"
+config_dir = "config"
+
+[[tenants]]
+id = "team-a"
+api_key = "secret-key"
+
+[tenants.latency]
+mode = "realistic"
+base_ms = 200
+jitter_pct = 0.1
+
+[[tenants]]
+id = "ci-pipeline"
+"#;
+        let cfg: AppConfig = config::Config::builder()
+            .add_source(config::File::from_str(toml_str, config::FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+
+        assert_eq!(cfg.tenants.len(), 2);
+
+        let team_a = &cfg.tenants[0];
+        assert_eq!(team_a.id, "team-a");
+        assert_eq!(team_a.api_key.as_deref(), Some("secret-key"));
+        let lat = team_a.latency.as_ref().unwrap();
+        assert_eq!(lat.mode, "realistic");
+        assert_eq!(lat.base_ms, 200);
+
+        let ci = &cfg.tenants[1];
+        assert_eq!(ci.id, "ci-pipeline");
+        assert!(ci.api_key.is_none());
+        assert!(ci.latency.is_none());
+    }
+
+    #[test]
+    fn test_duplicate_tenant_id_is_rejected() {
+        use std::io::Write;
+
+        let toml_content = r#"
+port = 8100
+workers = 1
+log_level = "error"
+config_dir = "config"
+
+[[tenants]]
+id = "team-a"
+
+[[tenants]]
+id = "team-a"
+"#;
+        let mut tmp = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        tmp.write_all(toml_content.as_bytes()).unwrap();
+        tmp.flush().unwrap();
+
+        let args = Cli::parse_from(&["mock-server", "--config", tmp.path().to_str().unwrap()]);
+        let err = AppConfig::build_config(args).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("team-a"), "error should name the duplicate tenant id; got: {msg}");
+    }
+
+    #[test]
+    fn test_tenant_api_key_not_serialized() {
+        let tenant = TenantConfig {
+            id: "team-a".to_string(),
+            api_key: Some("super-secret".to_string()),
+            latency: None,
+            chaos: None,
+        };
+        let json = serde_json::to_string(&tenant).unwrap();
+        assert!(!json.contains("super-secret"), "api_key must not appear in serialized output");
+        assert!(!json.contains("api_key"), "api_key field must not appear in serialized output");
     }
 }

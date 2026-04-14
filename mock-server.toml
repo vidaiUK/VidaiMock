@@ -15,3 +15,44 @@ jitter_pct = 0.2
 # [[endpoints]]
 # path = "/legacy/chat"
 # format = "openai"
+
+# ── Tenant Configuration ────────────────────────────────────────────────────
+#
+# Tenants represent distinct teams or CI pipelines sharing a single mock
+# instance.  Lifecycle:
+#   Create  → add a [[tenants]] block below and restart (or send SIGHUP).
+#   Modify  → edit the block and restart.
+#   Delete  → remove the block and restart.
+#
+# Authorization:
+#   • If `api_key` is omitted the tenant is accepted on its ID alone (dev mode).
+#   • If `api_key` is set callers must supply a matching `X-Tenant-Key` header;
+#     mismatches return 401 without leaking which tenant was requested.
+#   • Callers identify themselves with the `X-Tenant-ID` header.
+#   • An unknown `X-Tenant-ID` falls back to the anonymous (global) config.
+#
+# Per-tenant latency and chaos settings override the global [latency] and
+# [chaos] sections for requests belonging to that tenant.
+#
+# Secrets can also be supplied via environment variables, e.g.:
+#   VIDAIMOCK_TENANTS__0__API_KEY=sk-mock-team-a-abc123
+#
+# [[tenants]]
+# id = "team-a"
+# api_key = "sk-mock-team-a-abc123"   # remove to accept any request for this ID
+#
+# [tenants.latency]
+# mode = "realistic"
+# base_ms = 200
+# jitter_pct = 0.1
+#
+# [tenants.chaos]
+# drop_pct = 5.0
+#
+# [[tenants]]
+# id = "ci-pipeline"
+# # No api_key — any caller claiming this ID is accepted (low-friction CI mode)
+#
+# [tenants.latency]
+# mode = "benchmark"
+# base_ms = 0
