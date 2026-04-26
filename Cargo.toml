@@ -4,6 +4,7 @@ version = "0.2.7"
 edition = "2021"
 
 [dependencies]
+arc-swap = "1.7.1"
 axum = "0.8.7"
 clap = { version = "4.5.53", features = ["derive"] }
 config = "0.15.19"

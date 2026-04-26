@@ -17,14 +17,14 @@
  * VidaiMock: High-performance LLM API Mock Server.
  */
 
-use crc32fast::Hasher;
 use base64::prelude::*;
+use crc32fast::Hasher;
 
 pub struct AwsEventStreamEncoder;
 
 impl AwsEventStreamEncoder {
     /// Encodes a payload into an AWS Event Stream binary message.
-    /// 
+    ///
     /// The payload is expected to be a valid JSON string (e.g. `{"type":"content_block_delta"...}`).
     /// This function:
     /// 1. Base64 encodes that JSON.
@@ -33,7 +33,7 @@ impl AwsEventStreamEncoder {
     pub fn encode_chunk(payload_json: &str) -> Vec<u8> {
         // 1. Base64 encode the inner payload
         let b64_payload = BASE64_STANDARD.encode(payload_json);
-        
+
         // 2. Wrap in {"bytes": "..."}
         let outer_payload = format!(r#"{{"bytes":"{}"}}"#, b64_payload);
         let payload_bytes = outer_payload.as_bytes();

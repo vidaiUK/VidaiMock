@@ -51,7 +51,7 @@ Plus: Tool calling (OpenAI `tool_calls` + Anthropic `tool_use` + Gemini `functio
 
 ## ✨ Key Features
 
-- **🚀 Zero Config / Zero Fixtures**: Single **~7MB binary**, instant startup, no Docker/DB, and zero setup required.
+- **🚀 Zero Config / Zero Fixtures**: Single **~7MB binary**, instant startup, no Docker/DB, and zero setup required in default single mode.
 - **🌊 Physics-Accurate Streaming**: Realistic TTFT and token-by-token delivery with **provider-native streaming payloads** (OpenAI SSE, Responses API typed events, Anthropic EventStream, Gemini, etc.)
 - **⚡ High Performance**: 50,000+ RPS in benchmark mode
 - **🎛️ Chaos & Error Testing**: Inject failures, latency, malformed responses, and **custom HTTP status codes** (400, 401, 404, 429, 500, etc.) — every error returns a **provider-shaped JSON envelope** (OpenAI, Anthropic, Gemini)
@@ -119,9 +119,171 @@ curl -s http://localhost:8100/v1/chat/completions -H 'Content-Type: application/
 ## 📂 Project Structure
 
 - `bin/`: The VidaiMock executable
-- `config/`: Default provider YAMLs and J2 templates
+- `config/`: Legacy single-mode provider YAMLs and templates
+- `tenants/`: Multi-mode tenant overlays when tenancy mode is `multi`
 - `examples/`: 20+ advanced templates (RAG, Tool calling, Fuzzing, etc.)
 - `scripts/`: Diagnostic and verification helpers
+
+## 🏢 Single Mode vs Multi Mode
+
+VidaiMock stays a small stateless runtime with no database requirement. Tenancy is explicit and configured in `mock-server.toml`:
+
+- `single`: backward-compatible mode that uses `config/`
+- `multi`: tenant-aware mode that uses `tenants/`
+
+Single mode is still the simplest path: run the binary, keep your YAML and templates under `config/`, and VidaiMock behaves exactly like the legacy layout.
+
+Multi mode keeps one shared runtime but resolves each accepted request to a tenant before provider matching. Isolation here is logical workspace isolation inside one process, not OS-level or process-level isolation.
+
+In multi mode, `mock-server.toml` keeps the global runtime settings (`mode`, `tenants_dir`, `tenant_header`, global admin auth). Named tenant metadata lives with the tenant itself in `tenants/<id>/tenant.toml`.
+
+Tenant-owned policy can live there too. A tenant can override the global `latency` and `chaos` defaults in its own `tenant.toml`, and accepted requests use the resolved tenant policy before applying any per-request `X-Vidai-*` header overrides.
+
+Tenant metadata can live there as well. Safe fields such as `display_name` and `labels` are exposed to templates as `tenant.display_name` and `tenant.labels`, while tenant auth material stays out of template context.
+
+```toml
+# tenants/acme/tenant.toml
+id = "acme"
+display_name = "Acme Corp"
+
+[labels]
+tier = "gold"
+region = "eu-west"
+```
+
+```json
+{"tenant_id":"{{ tenant.id }}","tenant_name":"{{ tenant.display_name }}","tenant_region":"{{ tenant.labels.region }}"}
+```
+
+## 🗂️ Directory Layout
+
+Single mode uses the legacy layout:
+
+```text
+config/
+  providers/
+  templates/
+```
+
+Multi mode uses a tenant workspace layout:
+
+```text
+tenants/
+  default/
+    # tenant.toml optional: only needed for explicit default-tenant metadata
+    providers/
+    templates/
+  acme/
+    tenant.toml
+    providers/
+    templates/
+  globex/
+    tenant.toml
+    providers/
+    templates/
+```
+
+Built-ins are always the base layer. The effective runtime is built-ins plus that tenant's own overrides.
+
+- The default tenant always exists internally.
+- `tenants/default/` is only required when you want to override the built-in default tenant behavior.
+- `tenants/default/tenant.toml` is optional and is only needed when the default tenant has explicit metadata of its own.
+- Tenant-owned `latency` and `chaos` settings override the global defaults for that tenant only.
+- Named tenants do not inherit from each other.
+- Named tenants do not inherit from the default tenant.
+- The default tenant is fallback-only when no tenant signal is provided.
+
+What is isolated per tenant:
+- Providers, templates, and model listing
+- Tenant metadata exposed to templates
+- Tenant request keys and tenant-admin management auth
+- Tenant latency and chaos defaults
+
+What remains global:
+- The HTTP server process and streaming engine
+- Built-in base assets
+- Metrics/export pipeline and reload coordination
+- Global `/admin/*` operations
+
+## 🔀 Tenant Resolution
+
+In multi mode, a request can resolve a tenant in three ways:
+
+- Header only
+- Key only
+- Header plus key
+
+Resolution rules:
+
+- Header-only requests are allowed only when that tenant does not require a key.
+- Key-only requests are allowed when the key uniquely resolves a tenant.
+- Header plus key must resolve to the same tenant.
+- No header and no key falls back to the internal default tenant.
+- Unknown tenant, unknown key, or header/key conflict is rejected.
+- In shared multi-tenant mode, the public rejection response is intentionally generic. Internal metrics still keep structured rejection reasons such as unknown tenant, unknown key, missing key, and conflict.
+- Tenant key sources supported in config are `header` and `query`; `host` and `path` are rejected during validation.
+- Accepted requests use tenant-labelled metrics.
+- Rejected requests use separate rejection metrics.
+- Request duration metrics measure handler time until the response object is returned; for streaming routes they are closer to response setup / TTFB than full stream drain time.
+
+## 🔐 Management Endpoints
+
+Global admin endpoints live under `/admin/` and use dedicated admin auth configured under `tenancy.admin_auth`.
+
+- `GET /admin/tenants`
+- `GET /admin/tenants/{id}`
+- `POST /admin/reload`
+
+If `tenancy.admin_auth` is unset, `/admin/*` stays closed.
+
+Tenant self-management lives under `/tenant/` and uses tenant-admin auth, not global admin auth.
+
+- `GET /tenant`
+- `POST /tenant/reload`
+
+Normal tenant request keys stay on the mock traffic path only. Tenant self-management uses a separate tenant-local `management_auth` secret in `tenants/<id>/tenant.toml`, with `value_file` preferred over `value_env`, and `value_env` preferred over inline `value`.
+
+Relative `value_file` paths resolve from the owning config file:
+- `mock-server.toml` paths resolve relative to that file's directory
+- `tenants/<id>/tenant.toml` paths resolve relative to that tenant metadata file's directory
+
+By default the tenant-admin header is `x-tenant-admin-key`, and it can be overridden per tenant if needed.
+
+Tenant-admin credentials must be unique across tenants for each effective header+secret pair. Reusing the same secret under different tenant-admin headers is treated as a different identity, but sharing the same header+secret across tenants is rejected during validation and reload.
+
+`/tenant/*` is intentionally self-management, not a second global admin surface. It derives tenant identity from tenant-admin auth so a tenant can inspect or reload only its own workspace.
+
+Tenant self-management is scoped to the tenant resolved from tenant-admin auth. An optional tenant header may confirm that identity, but it cannot retarget management to another tenant.
+
+In single mode there is no tenant-local management auth surface, so `/tenant/*` stays closed unless global admin auth is intentionally configured and supplied for default-tenant inspection/reload.
+
+## 🔄 Reload Semantics
+
+`POST /admin/reload` re-runs startup config loading from the original startup source, then rebuilds the live tenancy, admin-auth, provider, and template runtime atomically.
+
+- Reload validates before activation.
+- Invalid provider YAML or template syntax rejects the reload instead of being skipped.
+- Failed reload keeps the previous working runtime active.
+- It refreshes the live tenancy/admin/provider/template runtime, not the whole process shape.
+- Changes to process-shaped settings such as `host`, `port`, `workers`, `log_level`, `latency`, `chaos`, `endpoints`, and `response_file` are rejected at reload time and still require a restart.
+- This is an explicit reload operation, not watch mode.
+
+`POST /tenant/reload` refreshes only the resolved tenant.
+
+- It rebuilds that tenant's runtime, request-auth lookup state, and tenant-admin auth state.
+- Invalid tenant provider YAML or template syntax rejects that tenant reload.
+- It does not reload every tenant.
+- Failed tenant reload keeps the previous working tenant state active.
+
+## 🔒 Security and Isolation Notes
+
+- VidaiMock is stateless and does not require a database.
+- Secret config supports `value`, `value_file`, and `value_env`.
+- `value_file` is preferred over `value_env`, and `value_env` is preferred over inline `value`.
+- Secret-bearing fields are intentionally omitted from serialized status/config output and sanitized management responses.
+- File- or env-backed secrets are preferred over inline values where possible.
+- Logical isolation here means request resolution, provider matching, templates, and tenant policy are separated by workspace, but tenants still share one process, one memory space, and one telemetry pipeline.
+- This is not hard isolation such as separate processes, containers, or OS sandboxes.
 
 ## 📦 Installation
 
@@ -328,7 +490,7 @@ Any endpoint accepts these headers to override behavior per-request:
 
 ## 🎯 Provider Config Reference
 
-Provider YAML files in `config/providers/` define how endpoints match and respond:
+Provider YAML files in `config/providers/` define how endpoints match and respond in single mode. In multi mode, tenant-owned metadata lives in `tenants/<id>/tenant.toml`, and tenant overlays live under `tenants/<id>/providers/` and `tenants/<id>/templates/`.
 
 ```yaml
 name: "my-provider"
@@ -338,7 +500,7 @@ error_template: "my/error.j2"        # Tera template path (HTTP 4xx / 5xx respon
 status_code: "200"                   # HTTP status — static or Tera expression
 priority: 10                         # Higher matches first
 stream:
-  enabled: true
+  enabled: true                      # Compatibility field; the stream block itself enables streaming
   frame_format: raw                  # "raw" = template controls SSE framing
   lifecycle:
     on_start:

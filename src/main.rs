@@ -17,25 +17,40 @@
  * VidaiMock: High-performance LLM API Mock Server.
  */
 
-use mimalloc::MiMalloc;
 use crate::config::AppConfig;
 use crate::server::start_server;
-use tracing::{info, Level};
-use tracing_subscriber::FmtSubscriber;
+use crate::tenancy::{build_runtime_store, TenantStoreHandle};
 use metrics_exporter_prometheus::PrometheusBuilder;
+use mimalloc::MiMalloc;
+use tracing::info;
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::FmtSubscriber;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
 mod config;
+mod tenancy;
 // mod formats; // Removed
+mod aws_event_stream;
 mod handlers;
-mod replacer;
-mod server;
 mod provider;
-mod aws_event_stream; // Added for Bedrock streaming
+mod replacer;
+mod server; // Added for Bedrock streaming
 
-
+/// Maps a `log_level` string to a `LevelFilter`.
+///
+/// `"off"` maps to `LevelFilter::OFF` to actually disable all tracing output.
+/// Unknown values fall back to `LevelFilter::INFO`.
+pub(crate) fn level_filter_from_str(log_level: &str) -> LevelFilter {
+    match log_level.to_lowercase().as_str() {
+        "off" => LevelFilter::OFF,
+        "error" => LevelFilter::ERROR,
+        "warn" => LevelFilter::WARN,
+        "debug" => LevelFilter::DEBUG,
+        _ => LevelFilter::INFO,
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = AppConfig::load()?;
@@ -53,42 +68,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Initialize Logging
-    let log_level = match config.log_level.to_lowercase().as_str() {
-        "debug" => Level::DEBUG,
-        "warn" => Level::WARN,
-        "error" => Level::ERROR,
-        "off" => Level::ERROR,
-        _ => Level::INFO,
-    };
+    // Initialize Logging.
+    // LevelFilter::OFF completely disables tracing so "off" behaves honestly.
+    let log_filter = level_filter_from_str(&config.log_level);
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(log_level)
-        .finish();
+    let subscriber = FmtSubscriber::builder().with_max_level(log_filter).finish();
 
     if let Err(e) = tracing::subscriber::set_global_default(subscriber) {
         eprintln!("ERROR: Failed to initialize logging: {}", e);
         std::process::exit(1);
     }
 
-    if config.log_level != "off" {
-        tracing::info!("VidaiMock Initialization (Workers: {}, Latency: {}ms, Mode: {})", 
-            workers, config.latency.base_ms, config.latency.mode);
+    if log_filter != LevelFilter::OFF {
+        tracing::info!(
+            "VidaiMock Initialization (Workers: {}, Latency: {}ms, Mode: {})",
+            workers,
+            config.latency.base_ms,
+            config.latency.mode
+        );
 
         // Diagnostic: List embedded assets
         for file in crate::provider::Asset::iter() {
             tracing::debug!("Embedded Asset: {}", file);
         }
-        
+
         let endpoints: Vec<String> = config.endpoints.iter().map(|e| e.path.clone()).collect();
         info!(endpoints = ?endpoints, "Registered Endpoints");
     }
 
-    let registry = crate::provider::init_registry(&config.config_dir);
+    let tenants = std::sync::Arc::new(TenantStoreHandle::new(build_runtime_store(&config)?));
 
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(workers as usize)
         .enable_all()
         .build()?
-        .block_on(start_server(config, handle, registry))
+        .block_on(start_server(config, handle, tenants))
 }

@@ -17,16 +17,16 @@
  * VidaiMock: High-performance LLM API Mock Server.
  */
 
+use glob::glob;
+use rand::Rng;
+use regex::Regex;
+use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::fs;
-use glob::glob;
-use regex::Regex;
 use tera::Tera;
-use rand::Rng; // For random functions
-use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
 #[folder = "config/"]
@@ -63,6 +63,8 @@ pub struct ProviderConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderStreamConfig {
+    /// Compatibility flag retained for existing configs. The presence of the
+    /// `stream` block controls streaming behavior in the current runtime.
     #[serde(default)]
     pub enabled: bool,
     /// Default format string for data tokens if no detailed lifecycle is provided
@@ -108,43 +110,65 @@ impl ProviderRegistry {
     }
 
     pub fn load_from_dir(&mut self, config_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        let providers_pattern = config_dir.join("providers/*.yaml");
-        // let templates_pattern = config_dir.join("templates/**/*");
+        self.load_from_layers(&[config_dir])
+    }
 
+    pub fn load_from_layers(
+        &mut self,
+        config_dirs: &[&Path],
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // 1. Load Templates
         // Setup Tera with all templates (embedded + disk)
         let mut tera = Tera::default();
-        
+
         // Disable autoescape for JSON generation
         tera.autoescape_on(vec![]);
 
         // Register custom functions
-        tera.register_function("uuid", |_args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
-            Ok(tera::Value::String(uuid::Uuid::new_v4().to_string()))
-        });
+        tera.register_function(
+            "uuid",
+            |_args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
+                Ok(tera::Value::String(uuid::Uuid::new_v4().to_string()))
+            },
+        );
 
-        tera.register_function("timestamp", |_args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
-             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-             Ok(tera::Value::Number(serde_json::Number::from(now)))
-        });
+        tera.register_function(
+            "timestamp",
+            |_args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                Ok(tera::Value::Number(serde_json::Number::from(now)))
+            },
+        );
 
-        tera.register_function("iso_timestamp", |_args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
-             Ok(tera::Value::String(chrono::Utc::now().to_rfc3339()))
-        });
+        tera.register_function(
+            "iso_timestamp",
+            |_args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
+                Ok(tera::Value::String(chrono::Utc::now().to_rfc3339()))
+            },
+        );
 
-        tera.register_function("random_int", |args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
-             let min = args.get("min").and_then(|v| v.as_i64()).unwrap_or(0);
-             let max = args.get("max").and_then(|v| v.as_i64()).unwrap_or(100);
-             let val = rand::rng().random_range(min..=max);
-             Ok(tera::Value::Number(serde_json::Number::from(val)))
-        });
-        
-        tera.register_function("random_float", |args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
-             let min = args.get("min").and_then(|v| v.as_f64()).unwrap_or(0.0);
-             let max = args.get("max").and_then(|v| v.as_f64()).unwrap_or(1.0);
-             let val = rand::rng().random_range(min..=max);
-             Ok(tera::Value::from(val))
-        });
+        tera.register_function(
+            "random_int",
+            |args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
+                let min = args.get("min").and_then(|v| v.as_i64()).unwrap_or(0);
+                let max = args.get("max").and_then(|v| v.as_i64()).unwrap_or(100);
+                let val = rand::rng().random_range(min..=max);
+                Ok(tera::Value::Number(serde_json::Number::from(val)))
+            },
+        );
+
+        tera.register_function(
+            "random_float",
+            |args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
+                let min = args.get("min").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let max = args.get("max").and_then(|v| v.as_f64()).unwrap_or(1.0);
+                let val = rand::rng().random_range(min..=max);
+                Ok(tera::Value::from(val))
+            },
+        );
 
         // has_tool_result(messages=json.messages, provider="openai") -> bool
         //
@@ -166,73 +190,97 @@ impl ProviderRegistry {
         //
         // Returns false (not an error) on missing/null/malformed inputs so
         // template logic stays branchable without defensive filters.
-        tera.register_function("has_tool_result", |args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
-            let messages = match args.get("messages") {
-                Some(tera::Value::Array(a)) => a,
-                _ => return Ok(tera::Value::Bool(false)),
-            };
-            let provider = args.get("provider").and_then(|v| v.as_str()).unwrap_or("openai");
+        tera.register_function(
+            "has_tool_result",
+            |args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
+                let messages = match args.get("messages") {
+                    Some(tera::Value::Array(a)) => a,
+                    _ => return Ok(tera::Value::Bool(false)),
+                };
+                let provider = args
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("openai");
 
-            let found = messages.iter().any(|msg| match provider {
-                "openai" => {
-                    // tool-role message anywhere signals a prior tool_call was answered.
-                    msg.get("role").and_then(|r| r.as_str()) == Some("tool")
-                }
-                "anthropic" => {
-                    // user message carrying a tool_result content block.
-                    let is_user = msg.get("role").and_then(|r| r.as_str()) == Some("user");
-                    let has_block = msg.get("content")
-                        .and_then(|c| c.as_array())
-                        .map(|blocks| blocks.iter().any(|b| {
-                            b.get("type").and_then(|t| t.as_str()) == Some("tool_result")
-                        }))
-                        .unwrap_or(false);
-                    is_user && has_block
-                }
-                "gemini" => {
-                    // user content whose parts array includes a functionResponse.
-                    let is_user = msg.get("role").and_then(|r| r.as_str()) == Some("user");
-                    let has_fr = msg.get("parts")
-                        .and_then(|p| p.as_array())
-                        .map(|parts| parts.iter().any(|p| p.get("functionResponse").is_some()))
-                        .unwrap_or(false);
-                    is_user && has_fr
-                }
-                _ => false,
-            });
+                let found = messages.iter().any(|msg| match provider {
+                    "openai" => {
+                        // tool-role message anywhere signals a prior tool_call was answered.
+                        msg.get("role").and_then(|r| r.as_str()) == Some("tool")
+                    }
+                    "anthropic" => {
+                        // user message carrying a tool_result content block.
+                        let is_user = msg.get("role").and_then(|r| r.as_str()) == Some("user");
+                        let has_block = msg
+                            .get("content")
+                            .and_then(|c| c.as_array())
+                            .map(|blocks| {
+                                blocks.iter().any(|b| {
+                                    b.get("type").and_then(|t| t.as_str()) == Some("tool_result")
+                                })
+                            })
+                            .unwrap_or(false);
+                        is_user && has_block
+                    }
+                    "gemini" => {
+                        // user content whose parts array includes a functionResponse.
+                        let is_user = msg.get("role").and_then(|r| r.as_str()) == Some("user");
+                        let has_fr = msg
+                            .get("parts")
+                            .and_then(|p| p.as_array())
+                            .map(|parts| parts.iter().any(|p| p.get("functionResponse").is_some()))
+                            .unwrap_or(false);
+                        is_user && has_fr
+                    }
+                    _ => false,
+                });
 
-            Ok(tera::Value::Bool(found))
-        });
+                Ok(tera::Value::Bool(found))
+            },
+        );
 
-        let pick_filter = |value: &tera::Value, args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
-             let key = args.get("key").and_then(|v| v.as_str())
-                 .or_else(|| args.get("0").and_then(|v| v.as_str()))
-                 .ok_or_else(|| tera::Error::msg("Filter 'get' or 'pick' requires a 'key' argument"))?;
-             match value {
-                 tera::Value::Object(map) => {
-                     Ok(map.get(key).cloned().unwrap_or(tera::Value::Null))
-                 },
-                 _ => Ok(tera::Value::Null)
-             }
+        let pick_filter = |value: &tera::Value,
+                           args: &HashMap<String, tera::Value>|
+         -> tera::Result<tera::Value> {
+            let key = args
+                .get("key")
+                .and_then(|v| v.as_str())
+                .or_else(|| args.get("0").and_then(|v| v.as_str()))
+                .ok_or_else(|| {
+                    tera::Error::msg("Filter 'get' or 'pick' requires a 'key' argument")
+                })?;
+            match value {
+                tera::Value::Object(map) => Ok(map.get(key).cloned().unwrap_or(tera::Value::Null)),
+                _ => Ok(tera::Value::Null),
+            }
         };
 
         tera.register_filter("pick", pick_filter);
         tera.register_filter("get", pick_filter);
-        
-        tera.register_filter("minify", |value: &tera::Value, _args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
-            match value {
-                tera::Value::String(s) => {
-                    // Simple minification: parse as JSON and re-serialize to compact string
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(s) {
-                        Ok(tera::Value::String(serde_json::to_string(&json).unwrap()))
-                    } else {
-                        // Fallback to basic whitespace removal if not valid JSON
-                        Ok(tera::Value::String(s.lines().map(|line| line.trim()).collect::<Vec<_>>().join("")))
+
+        tera.register_filter(
+            "minify",
+            |value: &tera::Value,
+             _args: &HashMap<String, tera::Value>|
+             -> tera::Result<tera::Value> {
+                match value {
+                    tera::Value::String(s) => {
+                        // Simple minification: parse as JSON and re-serialize to compact string
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(s) {
+                            Ok(tera::Value::String(serde_json::to_string(&json).unwrap()))
+                        } else {
+                            // Fallback to basic whitespace removal if not valid JSON
+                            Ok(tera::Value::String(
+                                s.lines()
+                                    .map(|line| line.trim())
+                                    .collect::<Vec<_>>()
+                                    .join(""),
+                            ))
+                        }
                     }
-                },
-                _ => Ok(value.clone())
-            }
-        });
+                    _ => Ok(value.clone()),
+                }
+            },
+        );
 
         // a. Collect all templates (embedded first, then disk for overrides)
         let mut template_map = HashMap::new();
@@ -250,16 +298,18 @@ impl ProviderRegistry {
         }
 
         // 2. Disk templates (overrides embedded)
-        let templates_glob = config_dir.join("templates/**/*");
-        if let Ok(entries) = glob(templates_glob.to_str().ok_or("Invalid template path")?) {
-            for entry in entries {
-                if let Ok(path) = entry {
-                    if path.is_file() {
-                         let content = fs::read_to_string(&path)?;
-                         let rel_path = path.strip_prefix(config_dir.join("templates/"))?;
-                         let name = rel_path.to_str().ok_or("Invalid path")?.to_string();
-                         template_map.insert(name.clone(), content);
-                         tracing::debug!("Found disk template override: {}", name);
+        for config_dir in config_dirs {
+            let templates_glob = config_dir.join("templates/**/*");
+            if let Ok(entries) = glob(templates_glob.to_str().ok_or("Invalid template path")?) {
+                for entry in entries {
+                    if let Ok(path) = entry {
+                        if path.is_file() {
+                            let content = fs::read_to_string(&path)?;
+                            let rel_path = path.strip_prefix(config_dir.join("templates/"))?;
+                            let name = rel_path.to_str().ok_or("Invalid path")?.to_string();
+                            template_map.insert(name.clone(), content);
+                            tracing::debug!("Found disk template override: {}", name);
+                        }
                     }
                 }
             }
@@ -268,12 +318,11 @@ impl ProviderRegistry {
         // b. Add all collected templates to Tera
         for (name, content) in template_map {
             // Register with the relative name (e.g., openai/chat.json.j2)
-            if let Err(e) = tera.add_raw_template(&name, &content) {
-                 tracing::error!("Failed to parse template '{}': {:?}", name, e);
-            } else {
-                 tracing::debug!("Registered template: {}", name);
-            }
-            
+            tera.add_raw_template(&name, &content).map_err(|error| {
+                std::io::Error::other(format!("failed to parse template '{}': {}", name, error))
+            })?;
+            tracing::debug!("Registered template: {}", name);
+
             // Also register with config/templates/ prefix for compatibility with some provider configs
             let full_name = format!("config/templates/{}", name);
             if let Err(_) = tera.add_raw_template(&full_name, &content) {
@@ -283,39 +332,61 @@ impl ProviderRegistry {
 
         // 2. Load Providers
         // a. Load embedded and disk providers with shadowing
-        let mut loaded_provider_names = std::collections::HashSet::new();
-        
-        // 2. Load providers into a temporary list for sorting
-        let mut all_configs = Vec::new();
+        let mut provider_map = HashMap::new();
 
-        // 1. Load disk providers
-        if let Ok(entries) = glob(providers_pattern.to_str().unwrap()) {
-            for entry in entries {
-                if let Ok(path) = entry {
-                    if path.is_file() {
-                        let content = fs::read_to_string(&path)?;
-                        if let Ok(config) = serde_yaml::from_str::<ProviderConfig>(&content) {
-                            tracing::debug!("Discovered disk provider: {} ({})", config.name, path.display());
-                            all_configs.push(config);
-                            loaded_provider_names.insert(format!("providers/{}", path.file_name().unwrap().to_str().unwrap()));
+        // Embedded providers are the base layer for every runtime.
+        for file in Asset::iter() {
+            if file.starts_with("providers/") && file.ends_with(".yaml") {
+                if let Some(content) = Asset::get(&file) {
+                    let config_str = std::str::from_utf8(content.data.as_ref())?;
+                    let config = serde_yaml::from_str::<ProviderConfig>(config_str).map_err(
+                        |error| {
+                            std::io::Error::other(format!(
+                                "failed to parse embedded provider '{}': {}",
+                                file, error
+                            ))
+                        },
+                    )?;
+                    tracing::debug!("Discovered embedded provider: {}", config.name);
+                    provider_map.insert(file["providers/".len()..].to_string(), config);
+                }
+            }
+        }
+
+        // Later disk layers override earlier ones by filename.
+        for config_dir in config_dirs {
+            let providers_pattern = config_dir.join("providers/*.yaml");
+            if let Ok(entries) = glob(providers_pattern.to_str().unwrap()) {
+                for entry in entries {
+                    if let Ok(path) = entry {
+                        if path.is_file() {
+                            let content = fs::read_to_string(&path)?;
+                            let config = serde_yaml::from_str::<ProviderConfig>(&content).map_err(
+                                |error| {
+                                    std::io::Error::other(format!(
+                                        "failed to parse provider '{}': {}",
+                                        path.display(),
+                                        error
+                                    ))
+                                },
+                            )?;
+                            tracing::debug!(
+                                "Discovered disk provider: {} ({})",
+                                config.name,
+                                path.display()
+                            );
+                            provider_map.insert(
+                                path.file_name().unwrap().to_str().unwrap().to_string(),
+                                config,
+                            );
                         }
                     }
                 }
             }
         }
 
-        // 2. Load embedded providers that were NOT on disk
-        for file in Asset::iter() {
-            if file.starts_with("providers/") && file.ends_with(".yaml") && !loaded_provider_names.contains(file.as_ref()) {
-                if let Some(content) = Asset::get(&file) {
-                    let config_str = std::str::from_utf8(content.data.as_ref())?;
-                    if let Ok(config) = serde_yaml::from_str::<ProviderConfig>(config_str) {
-                        tracing::debug!("Discovered embedded provider: {}", config.name);
-                        all_configs.push(config);
-                    }
-                }
-            }
-        }
+        // 2. Load providers into a temporary list for sorting
+        let mut all_configs: Vec<ProviderConfig> = provider_map.into_values().collect();
 
         // 3. Sort by priority (descending)
         all_configs.sort_by(|a, b| b.priority.cmp(&a.priority));
@@ -330,11 +401,14 @@ impl ProviderRegistry {
         }
 
         if self.providers.is_empty() {
-            tracing::warn!("No providers found in configuration directory: {}", config_dir.display());
+            tracing::warn!("No providers found in configured registry layers");
         } else {
-            tracing::info!("Registered {} providers (Disk + Embedded)", self.providers.len());
+            tracing::info!(
+                "Registered {} providers (Disk + Embedded)",
+                self.providers.len()
+            );
         }
-        
+
         self.tera = Arc::new(tera);
         Ok(())
     }
@@ -348,7 +422,10 @@ impl ProviderRegistry {
         None
     }
 
-    pub fn add_provider(&mut self, config: ProviderConfig) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn add_provider(
+        &mut self,
+        config: ProviderConfig,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let regex = Regex::new(&config.matcher)?;
         self.compiled_matchers.push((regex, self.providers.len()));
         self.providers.push(config);
@@ -361,12 +438,12 @@ impl ProviderRegistry {
     }
 }
 
-pub fn init_registry(config_path: &Path) -> Arc<ProviderRegistry> {
+pub fn build_registry_from_layers(
+    config_dirs: &[&Path],
+) -> Result<Arc<ProviderRegistry>, Box<dyn std::error::Error>> {
     let mut registry = ProviderRegistry::new();
-    if let Err(e) = registry.load_from_dir(config_path) {
-        tracing::error!("Failed to load provider registry: {}", e);
-    }
-    Arc::new(registry)
+    registry.load_from_layers(config_dirs)?;
+    Ok(Arc::new(registry))
 }
 
 #[cfg(test)]
@@ -379,8 +456,10 @@ mod tests {
     fn test_embedded_assets_load() {
         let mut registry = ProviderRegistry::new();
         // Load from a non-existent directory to ensure it only loads embedded
-        registry.load_from_dir(&PathBuf::from("non_existent_dir")).unwrap();
-        
+        registry
+            .load_from_dir(&PathBuf::from("non_existent_dir"))
+            .unwrap();
+
         // Check if openai provider is in the list by name
         let has_openai = registry.providers.iter().any(|p| p.name == "openai");
         assert!(has_openai, "Embedded 'openai' provider should be loaded");
@@ -389,12 +468,14 @@ mod tests {
     #[test]
     fn test_disk_shadowing() {
         // Use a unique subdir for this test to avoid conflicts
-        let temp_base = std::env::current_dir().unwrap().join("target/test_shadowing_unique");
+        let temp_base = std::env::current_dir()
+            .unwrap()
+            .join("target/test_shadowing_unique");
         if temp_base.exists() {
             fs::remove_dir_all(&temp_base).unwrap();
         }
         fs::create_dir_all(temp_base.join("providers")).unwrap();
-        
+
         // We shadow openai.yaml
         let custom_provider = r#"
 name: "custom-openai"
@@ -414,7 +495,10 @@ response_template: "openai/chat.json.j2"
 
         // ALSO check that the embedded "openai" provider is NOT loaded because it was shadowed by filename
         let embedded_openai = registry.providers.iter().find(|p| p.name == "openai");
-        assert!(embedded_openai.is_none(), "Shadowed embedded provider should NOT be loaded");
+        assert!(
+            embedded_openai.is_none(),
+            "Shadowed embedded provider should NOT be loaded"
+        );
 
         // Clean up
         fs::remove_dir_all(temp_base).unwrap();
@@ -440,7 +524,9 @@ response_template: "openai/chat.json.j2"
     /// these tests don't depend on the bundled provider templates loading.
     fn test_tera_with_helper() -> Tera {
         let mut registry = ProviderRegistry::new();
-        registry.load_from_dir(&PathBuf::from("non_existent_dir_for_helper_tests")).unwrap();
+        registry
+            .load_from_dir(&PathBuf::from("non_existent_dir_for_helper_tests"))
+            .unwrap();
         (*registry.tera).clone()
     }
 
@@ -453,8 +539,11 @@ response_template: "openai/chat.json.j2"
         // one_off uses a fresh Tera instance without our registered helpers,
         // so we add the template to our pre-built instance and render from it.
         let mut tera = test_tera_with_helper();
-        tera.add_raw_template("__helper_test__",
-            r#"{{ has_tool_result(messages=messages, provider=provider_name) }}"#).unwrap();
+        tera.add_raw_template(
+            "__helper_test__",
+            r#"{{ has_tool_result(messages=messages, provider=provider_name) }}"#,
+        )
+        .unwrap();
         tera.render("__helper_test__", &ctx)
             .unwrap_or_else(|e| panic!("render failed: {e}"))
     }
@@ -600,9 +689,13 @@ response_template: "openai/chat.json.j2"
         ctx.insert("messages", &serde_json::Value::Null);
         ctx.insert("provider_name", &"openai");
         let mut tera = test_tera_with_helper();
-        tera.add_raw_template("__null_msgs_test__",
-            "{{ has_tool_result(messages=messages, provider=provider_name) }}").unwrap();
-        let rendered = tera.render("__null_msgs_test__", &ctx)
+        tera.add_raw_template(
+            "__null_msgs_test__",
+            "{{ has_tool_result(messages=messages, provider=provider_name) }}",
+        )
+        .unwrap();
+        let rendered = tera
+            .render("__null_msgs_test__", &ctx)
             .unwrap_or_else(|e| panic!("should not error on null input: {e}"));
         assert_eq!(rendered, "false");
     }
@@ -611,12 +704,7 @@ response_template: "openai/chat.json.j2"
     fn test_has_tool_result_handles_malformed_messages() {
         // Each element is something other than an object — helper must
         // tolerate without panicking and return false.
-        let msgs = serde_json::json!([
-            "string element",
-            42,
-            null,
-            ["nested", "array"]
-        ]);
+        let msgs = serde_json::json!(["string element", 42, null, ["nested", "array"]]);
         assert_eq!(eval_helper(&msgs, "openai"), "false");
     }
 
@@ -660,10 +748,16 @@ response_template: "openai/chat.json.j2"
     fn test_has_tool_result_defaults_to_openai_when_provider_omitted() {
         // If the template author omits `provider=...`, default to openai.
         let mut ctx = tera::Context::new();
-        ctx.insert("messages", &serde_json::json!([{"role": "tool", "content": "x"}]));
+        ctx.insert(
+            "messages",
+            &serde_json::json!([{"role": "tool", "content": "x"}]),
+        );
         let mut tera = test_tera_with_helper();
-        tera.add_raw_template("__default_provider_test__",
-            "{{ has_tool_result(messages=messages) }}").unwrap();
+        tera.add_raw_template(
+            "__default_provider_test__",
+            "{{ has_tool_result(messages=messages) }}",
+        )
+        .unwrap();
         let rendered = tera.render("__default_provider_test__", &ctx).unwrap();
         assert_eq!(rendered, "true");
     }

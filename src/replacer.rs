@@ -17,12 +17,13 @@
  * VidaiMock: High-performance LLM API Mock Server.
  */
 
-use tera::Context;
+use chrono::{SecondsFormat, Utc};
 use serde_json::Value;
 use std::collections::HashMap;
-use chrono::{Utc, SecondsFormat};
+use tera::Context;
 use uuid::Uuid;
 
+use crate::tenancy::TenantTemplateMetadata;
 
 pub struct Replacer;
 
@@ -34,14 +35,21 @@ impl Replacer {
         query_params: &HashMap<String, String>,
         path_segments: &[String],
         model: &str,
+        tenant: &TenantTemplateMetadata,
     ) -> Context {
         let mut context = Context::new();
 
         // 1. Standard Variables
         context.insert("timestamp", &Utc::now().timestamp());
-        context.insert("iso_timestamp", &Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true));
+        context.insert(
+            "iso_timestamp",
+            &Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        );
         context.insert("uuid", &Uuid::new_v4().to_string());
-        context.insert("request_id", &format!("req_{}", &Uuid::new_v4().to_string()[..8]));
+        context.insert(
+            "request_id",
+            &format!("req_{}", &Uuid::new_v4().to_string()[..8]),
+        );
         context.insert("model", model);
 
         // 2. Request Data
@@ -51,10 +59,11 @@ impl Replacer {
         context.insert("headers", headers);
         context.insert("query", query_params);
         context.insert("path_segments", path_segments);
+        context.insert("tenant", &tenant);
 
-        // 3. Helper Functions (via register_function if we had mutable access to terra, 
+        // 3. Helper Functions (via register_function if we had mutable access to terra,
         // but for Context we just add data. Complex logic should be in filters/functions registered on Tera instance)
-        
+
         context
     }
 }

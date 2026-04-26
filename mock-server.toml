@@ -1,7 +1,24 @@
 port = 8100
 workers = 8
 log_level = "info"
-config_dir = "config" # Directory containing providers/ and templates/
+config_dir = "config" # Single mode schema root. In single mode, providers/ and templates/ live under config/
+
+[tenancy]
+mode = "single" # "single" uses config/ and stays backward-compatible. "multi" uses tenants/
+# tenant_header = "x-tenant" # Optional explicit tenant header for multi mode requests.
+# [tenancy.admin_auth] # Optional global admin auth for /admin/* management endpoints.
+# header = "x-admin-key"
+# value = "change-me" # Supported secret sources: value, value_file, value_env. File is preferred. Relative value_file paths resolve from this mock-server.toml directory.
+# tenants_dir = "tenants" # In multi mode, named tenant metadata lives in tenants/<id>/tenant.toml. tenants/default/ is only needed to customize the default tenant.
+# Example tenants/acme/tenant.toml:
+# id = "acme"
+# [[keys]]
+# source = "header" # This implementation supports "header" and "query". "host" and "path" are currently unsupported and rejected.
+# name = "x-api-key"
+# value_file = "secrets/acme.key" # Normal mock traffic request key. Relative paths resolve from tenants/<id>/tenant.toml.
+# [management_auth]
+# header = "x-tenant-admin-key" # Optional tenant self-management auth for /tenant/*.
+# value_file = "secrets/acme-admin.key" # Separate from normal request keys. Relative paths resolve from tenants/<id>/tenant.toml. value_file > value_env > value, and each tenant-admin header+secret pair must be unique across tenants.
 
 # Latency Simulation Configuration
 [latency]
