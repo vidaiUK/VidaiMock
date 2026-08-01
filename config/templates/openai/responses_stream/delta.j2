@@ -1,3 +1,37 @@
-{# Responses API stream: per-chunk text delta #}
+{#- Responses API stream: per-chunk delta.
+
+    Two delta shapes (VM-012 / issue #8):
+      - text response -> response.output_text.delta with the text fragment
+      - function call -> response.function_call_arguments.delta with a
+                         fragment of the arguments JSON
+
+    Tool-mode is detected from the request body, consistent with start.j2 and
+    stop.j2. Relying on the chunk instead would be wrong here: when a tool call
+    is detected the engine passes a single STRUCTURED chunk (the function_call
+    item), and interpolating that into "{{ chunk }}" is what produced the
+    literal "[[object]]" text reported in issue #8 — Tera stringifies a
+    non-string value that way.
+
+    Real OpenAI streams tool arguments as several fragmented
+    function_call_arguments.delta events. For mock purposes we emit the
+    complete argument object in one delta, which any accumulator that
+    concatenates deltas reads as valid JSON.
+
+    `input` is only filtered when it is an array: the API also accepts a bare
+    string (`"input": "hello"`), and Tera's filter() raises on a non-array,
+    which would turn a valid request into a 500.
+-#}
+{%- set has_tool_result = false -%}
+{%- if json.input is defined and json.input is iterable and json.input is not string -%}
+  {%- if json.input | filter(attribute="type", value="function_call_output") | length > 0 -%}
+    {%- set_global has_tool_result = true -%}
+  {%- endif -%}
+{%- endif -%}
+{%- set is_tool_mode = json.tools and json.tools | length > 0 and not has_tool_result -%}
+{% if is_tool_mode -%}
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":4,"item_id":"fc_{{ uuid }}","output_index":0,"delta":"{\"city\":\"Paris\"}"}
+{%- else -%}
 event: response.output_text.delta
 data: {"type":"response.output_text.delta","sequence_number":4,"output_index":0,"content_index":0,"delta":"{{ chunk }}"}
+{%- endif %}

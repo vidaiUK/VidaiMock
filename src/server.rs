@@ -1418,4 +1418,235 @@ mod tests {
         ).unwrap();
         assert_eq!(body["isolated"], serde_json::json!(false));
     }
+
+    // ---------------------------------------------------------------------
+    // VM-012 — OpenAI Responses (/v1/responses) tool calling.
+    //
+    // Issue #8: the streaming path rendered a separate template set that had
+    // no tool branch at all, so a request carrying `tools` streamed generic
+    // filler text while the non-streaming path correctly returned a
+    // function_call. The structured chunk reached the template and Tera
+    // stringified it, emitting the literal "[[object]]" as the text delta.
+    //
+    // VM-011 covered streaming+tools for Gemini, Anthropic and OpenAI chat but
+    // omitted Responses, which is how this shipped. These tests close that gap
+    // for BOTH modes and BOTH turns of a tool loop.
+    // ---------------------------------------------------------------------
+
+    /// Sends a /v1/responses request and returns the raw body.
+    async fn post_responses(body: &'static str) -> String {
+        let app = create_app(get_test_config(), None, get_embedded_registry()).await;
+        let resp = app.oneshot(
+            Request::builder().method("POST").uri("/v1/responses")
+                .header("content-type", "application/json")
+                .body(Body::from(body)).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        String::from_utf8(drain_body(resp).await).unwrap()
+    }
+
+    const RESPONSES_WITH_TOOLS_STREAM: &str = r#"{
+        "model": "gpt-4o-mini",
+        "stream": true,
+        "input": [{"role": "user", "content": "Call the get_weather tool now."}],
+        "tools": [{"type": "function", "name": "get_weather",
+                   "parameters": {"type": "object", "properties": {}}}]
+    }"#;
+
+    /// The reported bug: streaming with `tools` must emit a function_call
+    /// output item, not text deltas.
+    #[tokio::test]
+    async fn test_vm012_responses_streaming_with_tools_emits_function_call() {
+        let text = post_responses(RESPONSES_WITH_TOOLS_STREAM).await;
+
+        assert!(!text.contains("[[object]]"),
+            "streaming must not stringify the structured tool chunk; got:\n{}", text);
+        assert!(text.contains(r#""type":"function_call""#),
+            "stream must contain a function_call output item; got:\n{}", text);
+        assert!(text.contains("response.function_call_arguments.delta"),
+            "stream must emit function_call_arguments.delta; got:\n{}", text);
+        assert!(text.contains("response.function_call_arguments.done"),
+            "stream must emit function_call_arguments.done; got:\n{}", text);
+        assert!(!text.contains("response.output_text.delta"),
+            "tool-mode stream must not emit text deltas; got:\n{}", text);
+        assert!(text.contains(r#""name":"get_weather""#),
+            "the caller's tool name must be echoed back; got:\n{}", text);
+    }
+
+    /// A client building the final item from lifecycle events needs
+    /// output_item.done before response.completed — skipping it for function
+    /// calls is a known interoperability failure in other mocks.
+    #[tokio::test]
+    async fn test_vm012_responses_streaming_tool_call_emits_output_item_done() {
+        let text = post_responses(RESPONSES_WITH_TOOLS_STREAM).await;
+
+        let done_at = text.find("response.output_item.done")
+            .unwrap_or_else(|| panic!("missing output_item.done; got:\n{}", text));
+        let completed_at = text.find("response.completed")
+            .unwrap_or_else(|| panic!("missing response.completed; got:\n{}", text));
+        assert!(done_at < completed_at,
+            "output_item.done must precede response.completed; got:\n{}", text);
+
+        // function_call_arguments.done must carry `name`: without it a client
+        // cannot tell which function to invoke.
+        let done_line = text.lines()
+            .find(|l| l.contains("response.function_call_arguments.done") && l.starts_with("data:"))
+            .unwrap_or_else(|| panic!("no data line for arguments.done; got:\n{}", text));
+        assert!(done_line.contains(r#""name":"get_weather""#),
+            "function_call_arguments.done must include the function name; got:\n{}", done_line);
+    }
+
+    /// Regression guard: without `tools`, streaming must still be plain text.
+    /// The fix must not turn every stream into a tool call.
+    #[tokio::test]
+    async fn test_vm012_responses_streaming_without_tools_still_streams_text() {
+        let text = post_responses(r#"{
+            "model": "gpt-4o-mini",
+            "stream": true,
+            "input": [{"role": "user", "content": "hello"}]
+        }"#).await;
+
+        assert!(text.contains("response.output_text.delta"),
+            "text mode must emit output_text deltas; got:\n{}", text);
+        assert!(!text.contains(r#""type":"function_call""#),
+            "no tools in request => no function_call; got:\n{}", text);
+        assert!(text.contains("response.content_part.added"),
+            "text mode must still open a content part; got:\n{}", text);
+    }
+
+    /// Agentic loop termination, streaming: a `function_call_output` item in
+    /// `input` means the tool already answered, so the mock must synthesize
+    /// text. Returning another tool call loops the client forever.
+    #[tokio::test]
+    async fn test_vm012_responses_streaming_tool_loop_terminates_on_result() {
+        let text = post_responses(r#"{
+            "model": "gpt-4o-mini",
+            "stream": true,
+            "input": [
+                {"role": "user", "content": "What is the weather?"},
+                {"type": "function_call", "call_id": "c1", "name": "get_weather", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": "15C cloudy"}
+            ],
+            "tools": [{"type": "function", "name": "get_weather", "parameters": {}}]
+        }"#).await;
+
+        assert!(!text.contains(r#""type":"function_call""#),
+            "must not call the tool again after a tool result; got:\n{}", text);
+        assert!(text.contains("response.output_text.delta"),
+            "must synthesize text after a tool result; got:\n{}", text);
+        assert!(!text.contains("[[object]]"),
+            "termination must be real text, not a stringified chunk; got:\n{}", text);
+    }
+
+    /// Agentic loop termination, non-streaming. This path branched on the
+    /// presence of `tools` alone, so it looped too — the bug was not
+    /// streaming-only.
+    #[tokio::test]
+    async fn test_vm012_responses_tool_loop_terminates_on_result() {
+        let text = post_responses(r#"{
+            "model": "gpt-4o-mini",
+            "input": [
+                {"role": "user", "content": "What is the weather?"},
+                {"type": "function_call", "call_id": "c1", "name": "get_weather", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": "15C cloudy"}
+            ],
+            "tools": [{"type": "function", "name": "get_weather", "parameters": {}}]
+        }"#).await;
+
+        let json: serde_json::Value = serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("invalid JSON ({}); got:\n{}", e, text));
+        let kinds: Vec<&str> = json["output"].as_array().unwrap().iter()
+            .filter_map(|o| o["type"].as_str()).collect();
+        assert!(!kinds.contains(&"function_call"),
+            "must not call the tool again after a tool result; got:\n{}", text);
+        assert!(kinds.contains(&"message"),
+            "must return a message after a tool result; got:\n{}", text);
+    }
+
+    /// Regression guard: with `tools` and no tool result, non-streaming must
+    /// still return a function_call.
+    #[tokio::test]
+    async fn test_vm012_responses_tools_without_result_still_returns_function_call() {
+        let text = post_responses(r#"{
+            "model": "gpt-4o-mini",
+            "input": [{"role": "user", "content": "What is the weather?"}],
+            "tools": [{"type": "function", "name": "get_weather", "parameters": {}}]
+        }"#).await;
+
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json["output"][0]["type"], "function_call",
+            "tools without a result must still produce a function_call; got:\n{}", text);
+    }
+
+    /// The Responses API accepts `input` as a bare string as well as an array.
+    /// Tool detection filters `input`, and Tera's filter() raises on a
+    /// non-array — which turned this valid request into a 500. Both modes are
+    /// covered because all four templates do the same detection.
+    #[tokio::test]
+    async fn test_vm012_responses_accepts_string_input_with_tools() {
+        let text = post_responses(r#"{
+            "model": "gpt-4o-mini",
+            "input": "What is the weather?",
+            "tools": [{"type": "function", "name": "get_weather", "parameters": {}}]
+        }"#).await;
+        let json: serde_json::Value = serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("string input must render valid JSON ({}); got:\n{}", e, text));
+        assert_eq!(json["output"][0]["type"], "function_call",
+            "string input with tools must still produce a function_call; got:\n{}", text);
+
+        let stream = post_responses(r#"{
+            "model": "gpt-4o-mini",
+            "stream": true,
+            "input": "What is the weather?",
+            "tools": [{"type": "function", "name": "get_weather", "parameters": {}}]
+        }"#).await;
+        assert!(stream.contains("response.function_call_arguments.done"),
+            "string input must stream a function call, not error; got:\n{}", stream);
+    }
+
+    /// An empty `tools` array is not a tool request. Guards against treating
+    /// `"tools": []` as truthy and emitting a spurious function call.
+    #[tokio::test]
+    async fn test_vm012_responses_empty_tools_array_streams_text() {
+        let text = post_responses(r#"{
+            "model": "gpt-4o-mini",
+            "stream": true,
+            "input": [{"role": "user", "content": "hello"}],
+            "tools": []
+        }"#).await;
+        assert!(!text.contains(r#""type":"function_call""#),
+            "empty tools array must not produce a function_call; got:\n{}", text);
+        assert!(text.contains("response.output_text.delta"),
+            "empty tools array must stream text; got:\n{}", text);
+    }
+
+    /// Real OpenAI keeps the response id stable for the life of a stream, and
+    /// the item id stable across that item's events. The templates previously
+    /// called uuid() per interpolation, so every event carried a different id
+    /// and strict clients correlating by id would break.
+    #[tokio::test]
+    async fn test_vm012_responses_stream_ids_are_stable_across_events() {
+        let text = post_responses(RESPONSES_WITH_TOOLS_STREAM).await;
+
+        let ids: std::collections::HashSet<&str> = text.match_indices("\"id\":\"resp_")
+            .map(|(i, _)| {
+                let start = i + "\"id\":\"".len();
+                let rest = &text[start..];
+                &rest[..rest.find('"').unwrap()]
+            })
+            .collect();
+        assert_eq!(ids.len(), 1,
+            "response id must be identical in every event of one stream, found {:?}; got:\n{}",
+            ids, text);
+
+        let item_ids: std::collections::HashSet<&str> = text.match_indices("\"item_id\":\"")
+            .map(|(i, _)| {
+                let start = i + "\"item_id\":\"".len();
+                let rest = &text[start..];
+                &rest[..rest.find('"').unwrap()]
+            })
+            .collect();
+        assert!(item_ids.len() <= 1,
+            "function call item_id must be stable, found {:?}; got:\n{}", item_ids, text);
+    }
 }

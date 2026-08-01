@@ -1,12 +1,51 @@
-{# Responses API stream: opening events (response.created → content_part.added) #}
+{#- Responses API stream: opening events.
+
+    Two shapes, chosen from the request (VM-012 / issue #8):
+      - text response  -> output_item.added(message) + content_part.added
+      - function call   -> output_item.added(function_call), no content part
+
+    Tool-mode detection mirrors the non-streaming template (responses.json.j2):
+    tools present AND no tool result yet in `input`. It is done from the REQUEST
+    body because `chunk` is not bound at on_start time (it is only bound during
+    per-chunk rendering) — the same constraint the Anthropic stream templates
+    document.
+
+    The Responses API encodes a prior tool result as an `input` item of type
+    "function_call_output" (there is no role=="tool" message as in
+    chat.completions), so the has_tool_result() helper — which scans for
+    provider-specific *message* shapes — does not apply here. A plain Tera
+    `filter` on the top-level `type` attribute expresses this exactly, and
+    keeps the Responses provider config-only.
+
+    `input` is only filtered when it is an array: the API also accepts a bare
+    string (`"input": "hello"`), and Tera's filter() raises on a non-array,
+    which would turn a valid request into a 500.
+
+    IDs use the per-request `{{ uuid }}` context variable rather than the
+    `uuid()` function: `uuid()` returns a fresh value on every call, which
+    would emit a different resp_/fc_ id in each event of a single stream.
+    Real OpenAI keeps them stable so clients can correlate events by id.
+-#}
+{%- set has_tool_result = false -%}
+{%- if json.input is defined and json.input is iterable and json.input is not string -%}
+  {%- if json.input | filter(attribute="type", value="function_call_output") | length > 0 -%}
+    {%- set_global has_tool_result = true -%}
+  {%- endif -%}
+{%- endif -%}
+{%- set is_tool_mode = json.tools and json.tools | length > 0 and not has_tool_result -%}
 event: response.created
-data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_{{ uuid() }}","object":"response","created_at":{{ timestamp() }},"status":"in_progress","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[],"usage":null}}
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_{{ uuid }}","object":"response","created_at":{{ timestamp() }},"status":"in_progress","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[],"usage":null}}
 
 event: response.in_progress
-data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_{{ uuid() }}","object":"response","created_at":{{ timestamp() }},"status":"in_progress","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[],"usage":null}}
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_{{ uuid }}","object":"response","created_at":{{ timestamp() }},"status":"in_progress","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[],"usage":null}}
 
+{% if is_tool_mode -%}
 event: response.output_item.added
-data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"msg_{{ uuid() }}","type":"message","role":"assistant","status":"in_progress","content":[]}}
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"fc_{{ uuid }}","type":"function_call","call_id":"call_{{ uuid }}","name":"{{ json.tools.0.name | default(value='mock_function') }}","arguments":"","status":"in_progress"}}
+{%- else -%}
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"msg_{{ uuid }}","type":"message","role":"assistant","status":"in_progress","content":[]}}
 
 event: response.content_part.added
 data: {"type":"response.content_part.added","sequence_number":3,"output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}
+{%- endif %}

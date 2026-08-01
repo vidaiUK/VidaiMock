@@ -1,4 +1,46 @@
-{# Responses API stream: closing events (text.done → response.completed) #}
+{#- Responses API stream: closing events (VM-012 / issue #8).
+
+    Two closing sequences, matching the shape start.j2 opened:
+      - function call -> function_call_arguments.done + output_item.done
+                         (function_call item) + response.completed
+      - text response -> output_text.done + content_part.done +
+                         output_item.done (message) + response.completed
+
+    The `output_item.done` event is emitted in BOTH branches. Real OpenAI sends
+    it before response.completed, and several third-party implementations are
+    known to skip it for function calls, which breaks clients that build the
+    final item from item lifecycle events rather than from the completed
+    envelope.
+
+    function_call_arguments.done carries `name` as well as `arguments`: the
+    name is required for a client to know which function to invoke, and
+    omitting it is a documented interoperability failure in other mocks.
+
+    `response.completed.output[]` carries the function_call item so clients
+    that read only the final envelope see the tool call too.
+
+    `input` is only filtered when it is an array: the API also accepts a bare
+    string (`"input": "hello"`), and Tera's filter() raises on a non-array,
+    which would turn a valid request into a 500.
+-#}
+{%- set has_tool_result = false -%}
+{%- if json.input is defined and json.input is iterable and json.input is not string -%}
+  {%- if json.input | filter(attribute="type", value="function_call_output") | length > 0 -%}
+    {%- set_global has_tool_result = true -%}
+  {%- endif -%}
+{%- endif -%}
+{%- set is_tool_mode = json.tools and json.tools | length > 0 and not has_tool_result -%}
+{%- set tool_name = json.tools.0.name | default(value='mock_function') -%}
+{% if is_tool_mode -%}
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","sequence_number":5,"item_id":"fc_{{ uuid }}","output_index":0,"name":"{{ tool_name }}","arguments":"{\"city\":\"Paris\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":6,"output_index":0,"item":{"id":"fc_{{ uuid }}","type":"function_call","call_id":"call_{{ uuid }}","name":"{{ tool_name }}","arguments":"{\"city\":\"Paris\"}","status":"completed"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":7,"response":{"id":"resp_{{ uuid }}","object":"response","created_at":{{ timestamp() }},"status":"completed","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[{"id":"fc_{{ uuid }}","type":"function_call","call_id":"call_{{ uuid }}","name":"{{ tool_name }}","arguments":"{\"city\":\"Paris\"}","status":"completed"}],"usage":{"input_tokens":18,"output_tokens":25,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":43}}}
+{%- else -%}
 event: response.output_text.done
 data: {"type":"response.output_text.done","sequence_number":5,"output_index":0,"content_index":0,"text":"mock response complete"}
 
@@ -6,7 +48,8 @@ event: response.content_part.done
 data: {"type":"response.content_part.done","sequence_number":6,"output_index":0,"content_index":0,"part":{"type":"output_text","text":"mock response complete","annotations":[]}}
 
 event: response.output_item.done
-data: {"type":"response.output_item.done","sequence_number":7,"output_index":0,"item":{"id":"msg_{{ uuid() }}","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"mock response complete","annotations":[]}]}}
+data: {"type":"response.output_item.done","sequence_number":7,"output_index":0,"item":{"id":"msg_{{ uuid }}","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"mock response complete","annotations":[]}]}}
 
 event: response.completed
-data: {"type":"response.completed","sequence_number":8,"response":{"id":"resp_{{ uuid() }}","object":"response","created_at":{{ timestamp() }},"status":"completed","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[{"id":"msg_{{ uuid() }}","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"mock response complete","annotations":[]}]}],"usage":{"input_tokens":18,"output_tokens":25,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":43}}}
+data: {"type":"response.completed","sequence_number":8,"response":{"id":"resp_{{ uuid }}","object":"response","created_at":{{ timestamp() }},"status":"completed","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[{"id":"msg_{{ uuid }}","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"mock response complete","annotations":[]}]}],"usage":{"input_tokens":18,"output_tokens":25,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":43}}}
+{%- endif %}

@@ -17,8 +17,29 @@
   {% endif %}
 {% endif %}
 
+{#
+   Tool-call branching must also terminate the agentic loop: once a tool RESULT
+   is in the history the mock has to synthesize text, otherwise a client
+   (Codex, ADK, LangGraph) calls the tool, feeds the result back, receives the
+   same tool call again, and loops forever.
+
+   The Responses API encodes a tool result as an `input` item of type
+   "function_call_output" — there is no role=="tool" message as in
+   chat.completions, so has_tool_result() (which scans message shapes) does not
+   apply. A plain Tera filter on the top-level `type` expresses it directly.
+
+   `input` is only filtered when it is an array: the API also accepts a bare
+   string (`"input": "hello"`), and Tera's filter() raises on a non-array,
+   which would turn a valid request into a 500.
+#}
+{% set has_tool_result = false %}
+{% if json.input is defined and json.input is iterable and json.input is not string %}
+  {% if json.input | filter(attribute="type", value="function_call_output") | length > 0 %}
+    {% set_global has_tool_result = true %}
+  {% endif %}
+{% endif %}
 {% set has_tools = false %}
-{% if json.tools is defined %}
+{% if json.tools is defined and json.tools | length > 0 and not has_tool_result %}
   {% set has_tools = true %}
 {% endif %}
 
@@ -61,7 +82,10 @@
       "content": [
         {
           "type": "output_text",
-          "text": "This is a mock response from VidaiMock Responses API.",
+{#- After a tool result the reply is a synthesis of that result, not a generic
+    greeting. Mirrors the wording chat.json.j2 uses for the same case so both
+    OpenAI surfaces read consistently. -#}
+          "text": "{% if has_tool_result %}Based on the tool results, here is the answer.{% else %}This is a mock response from VidaiMock Responses API.{% endif %}",
           "annotations": []
         }
       ]
