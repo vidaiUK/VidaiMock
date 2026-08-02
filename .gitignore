@@ -34,6 +34,9 @@ presets/my_custom_provider.json
 *.hgrm
 *.svg
 
+# Internal design docs — working notes, deliberately not published
+/design-docs/
+
 # Distribution
 /vidaimock-dist/
 /server.log
