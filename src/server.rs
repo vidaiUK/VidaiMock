@@ -1620,6 +1620,159 @@ mod tests {
             "empty tools array must stream text; got:\n{}", text);
     }
 
+    // ---------------------------------------------------------------------
+    // VM-013 — tool calling for the OpenAI-compatible providers.
+    //
+    // azure-openai, mistral, openai-compatible, groq and openrouter had no
+    // tool branching in EITHER mode: they rendered templates that echoed the
+    // request back regardless of `tools`. Unlike VM-012 this was never a
+    // regression — it had simply never been built — but it left the mock
+    // unusable for testing tool-calling clients against those endpoints.
+    //
+    // Each provider keeps its own envelope (groq's timing fields,
+    // openrouter's provider/total_cost), so the templates stay separate and
+    // these tests assert both the tool call AND the provider-specific fields.
+    // ---------------------------------------------------------------------
+
+    /// POSTs to an arbitrary path and returns the raw body.
+    async fn post_path(uri: &'static str, body: &'static str) -> String {
+        let app = create_app(get_test_config(), None, get_embedded_registry()).await;
+        let resp = app.oneshot(
+            Request::builder().method("POST").uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body)).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{} should return 200", uri);
+        String::from_utf8(drain_body(resp).await).unwrap()
+    }
+
+    const COMPAT_TOOLS_BODY: &str = r#"{
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "What is the weather?"}],
+        "tools": [{"type": "function", "function": {
+            "name": "get_weather", "parameters": {"type": "object", "properties": {}}}}]
+    }"#;
+
+    const COMPAT_TOOL_RESULT_BODY: &str = r#"{
+        "model": "gpt-4",
+        "messages": [
+            {"role": "user", "content": "What is the weather?"},
+            {"role": "assistant", "tool_calls": [{"id": "call_1", "type": "function",
+             "function": {"name": "get_weather", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "15C cloudy"}
+        ],
+        "tools": [{"type": "function", "function": {
+            "name": "get_weather", "parameters": {"type": "object", "properties": {}}}}]
+    }"#;
+
+    /// Asserts a chat.completion body carries a tool call echoing the caller's
+    /// tool name, with finish_reason=tool_calls.
+    fn assert_tool_call(text: &str, who: &str) {
+        let json: serde_json::Value = serde_json::from_str(text)
+            .unwrap_or_else(|e| panic!("{}: invalid JSON ({}); got:\n{}", who, e, text));
+        let choice = &json["choices"][0];
+        assert_eq!(choice["finish_reason"], "tool_calls",
+            "{}: finish_reason must be tool_calls; got:\n{}", who, text);
+        assert_eq!(choice["message"]["tool_calls"][0]["function"]["name"], "get_weather",
+            "{}: must echo the caller's tool name; got:\n{}", who, text);
+    }
+
+    /// Asserts a chat.completion body terminated the loop with plain text.
+    fn assert_terminated(text: &str, who: &str) {
+        let json: serde_json::Value = serde_json::from_str(text)
+            .unwrap_or_else(|e| panic!("{}: invalid JSON ({}); got:\n{}", who, e, text));
+        let choice = &json["choices"][0];
+        assert_eq!(choice["finish_reason"], "stop",
+            "{}: must stop after a tool result; got:\n{}", who, text);
+        assert!(choice["message"].get("tool_calls").is_none()
+                || choice["message"]["tool_calls"].is_null(),
+            "{}: must not call the tool again after a result; got:\n{}", who, text);
+        assert!(choice["message"]["content"].as_str().is_some(),
+            "{}: must synthesize text after a tool result; got:\n{}", who, text);
+    }
+
+    #[tokio::test]
+    async fn test_vm013_azure_returns_tool_calls() {
+        let uri = "/openai/deployments/gpt-4/chat/completions";
+        assert_tool_call(&post_path(uri, COMPAT_TOOLS_BODY).await, "azure");
+        assert_terminated(&post_path(uri, COMPAT_TOOL_RESULT_BODY).await, "azure");
+    }
+
+    #[tokio::test]
+    async fn test_vm013_mistral_returns_tool_calls() {
+        let uri = "/v1/mistral/chat/completions";
+        assert_tool_call(&post_path(uri, COMPAT_TOOLS_BODY).await, "mistral");
+        assert_terminated(&post_path(uri, COMPAT_TOOL_RESULT_BODY).await, "mistral");
+    }
+
+    /// Groq keeps its own usage block; the tool branch must not drop it.
+    #[tokio::test]
+    async fn test_vm013_groq_returns_tool_calls_and_keeps_usage_shape() {
+        let uri = "/groq/v1/chat/completions";
+        let text = post_path(uri, COMPAT_TOOLS_BODY).await;
+        assert_tool_call(&text, "groq");
+
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(json["usage"].get("queue_time").is_some(),
+            "groq tool response must keep its usage shape; got:\n{}", text);
+        assert_eq!(json["system_fingerprint"], "fp_mock_groq");
+
+        assert_terminated(&post_path(uri, COMPAT_TOOL_RESULT_BODY).await, "groq");
+    }
+
+    /// OpenRouter adds `provider` and usage.total_cost; the tool branch must
+    /// not drop them.
+    #[tokio::test]
+    async fn test_vm013_openrouter_returns_tool_calls_and_keeps_envelope() {
+        let uri = "/api/v1/chat/completions";
+        let text = post_path(uri, COMPAT_TOOLS_BODY).await;
+        assert_tool_call(&text, "openrouter");
+
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json["provider"], "MockProvider",
+            "openrouter tool response must keep `provider`; got:\n{}", text);
+        assert!(json["usage"].get("total_cost").is_some(),
+            "openrouter tool response must keep total_cost; got:\n{}", text);
+
+        assert_terminated(&post_path(uri, COMPAT_TOOL_RESULT_BODY).await, "openrouter");
+    }
+
+    /// The shared OpenAI-compatible stream chunk template must emit a
+    /// tool_calls delta for a structured chunk. Without the branch the chunk
+    /// is stringified as "[[object]]" — the same defect as issue #8.
+    #[tokio::test]
+    async fn test_vm013_compat_streaming_emits_tool_calls_delta() {
+        let text = post_path("/openai/deployments/gpt-4/chat/completions", r#"{
+            "model": "gpt-4",
+            "stream": true,
+            "messages": [{"role": "user", "content": "What is the weather?"}],
+            "tools": [{"type": "function", "function": {
+                "name": "get_weather", "parameters": {}}}]
+        }"#).await;
+
+        assert!(!text.contains("[[object]]"),
+            "structured chunk must not be stringified; got:\n{}", text);
+        assert!(text.contains(r#""tool_calls""#),
+            "stream must carry a tool_calls delta; got:\n{}", text);
+        assert!(text.contains(r#""name":"get_weather""#),
+            "stream must echo the caller's tool name; got:\n{}", text);
+    }
+
+    /// Regression guard: without tools these providers must still echo text.
+    #[tokio::test]
+    async fn test_vm013_compat_without_tools_still_returns_text() {
+        let text = post_path("/v1/mistral/chat/completions", r#"{
+            "model": "mistral-medium",
+            "messages": [{"role": "user", "content": "hello"}]
+        }"#).await;
+
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json["choices"][0]["finish_reason"], "stop");
+        assert!(json["choices"][0]["message"].get("tool_calls").is_none()
+                || json["choices"][0]["message"]["tool_calls"].is_null(),
+            "no tools in request => no tool_calls; got:\n{}", text);
+    }
+
     /// Real OpenAI keeps the response id stable for the life of a stream, and
     /// the item id stable across that item's events. The templates previously
     /// called uuid() per interpolation, so every event carried a different id

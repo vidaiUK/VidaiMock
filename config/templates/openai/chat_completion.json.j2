@@ -1,3 +1,76 @@
+{#
+   Generic OpenAI-compatible chat.completion response.
+
+   Shared by providers that speak the OpenAI wire format but are not the
+   `openai` provider itself (azure-openai, mistral, openai-compatible). Unlike
+   openai/chat.json.j2 this template keeps a minimal envelope — these providers
+   only need the fields every OpenAI-compatible client reads.
+
+   Branches (order matters):
+     - tools present + tool result already in history -> plain text synthesis
+       (terminates agentic loops; otherwise a client calls the mock forever)
+     - tools present                                 -> tool_calls response
+     - default                                       -> echo the last message
+
+   The tool branches mirror openai/chat.json.j2 so a client pointed at any
+   OpenAI-compatible endpoint gets the same tool-calling behaviour (VM-013).
+#}
+{% set has_tools = json.tools is defined and json.tools | length > 0 %}
+{% if has_tools and has_tool_result(messages=json.messages, provider="openai") %}
+{
+  "id": "chatcmpl-{{ uuid }}",
+  "object": "chat.completion",
+  "created": {{ timestamp }},
+  "model": "{{ model }}",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Based on the tool results, here is the answer."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 72,
+    "completion_tokens": 14,
+    "total_tokens": 86
+  }
+}
+{% elif has_tools %}
+{
+  "id": "chatcmpl-{{ uuid }}",
+  "object": "chat.completion",
+  "created": {{ timestamp }},
+  "model": "{{ model }}",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_mock_{{ random_int(min=1000, max=9999) }}",
+            "type": "function",
+            "function": {
+              "name": "{{ json.tools.0.function.name | default(value='mock_tool') }}",
+              "arguments": "{}"
+            }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 51,
+    "completion_tokens": 14,
+    "total_tokens": 65
+  }
+}
+{% else %}
 {
   "id": "chatcmpl-{{ uuid }}",
   "object": "chat.completion",
@@ -19,3 +92,4 @@
     "total_tokens": 20
   }
 }
+{% endif %}

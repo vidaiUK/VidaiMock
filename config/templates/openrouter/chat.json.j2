@@ -1,3 +1,79 @@
+{#
+   OpenRouter chat.completion response.
+
+   OpenRouter is OpenAI-compatible on the wire but adds its own envelope
+   fields (`provider`, a gen- prefixed id, and total_cost in usage), so this
+   template stays separate from openai/chat.json.j2 rather than reusing it.
+
+   Branches (order matters):
+     - tools present + tool result already in history -> plain text synthesis
+       (terminates agentic loops; otherwise a client calls the mock forever)
+     - tools present                                 -> tool_calls response
+     - default                                       -> echo the prompt
+
+   Tool branches mirror openai/chat.json.j2 so tool calling behaves the same
+   across every OpenAI-compatible provider (VM-013).
+#}
+{% set has_tools = json.tools is defined and json.tools | length > 0 %}
+{% if has_tools and has_tool_result(messages=json.messages, provider="openai") %}
+{
+    "id": "gen-{{ uuid() }}",
+    "provider": "MockProvider",
+    "model": "{{ model }}",
+    "object": "chat.completion",
+    "created": {{ timestamp() }},
+    "choices": [
+        {
+            "message": {
+                "role": "assistant",
+                "content": "Based on the tool results, here is the answer."
+            },
+            "index": 0,
+            "finish_reason": "stop"
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 72,
+        "completion_tokens": 14,
+        "total_tokens": 86,
+        "total_cost": 0.00086
+    }
+}
+{% elif has_tools %}
+{
+    "id": "gen-{{ uuid() }}",
+    "provider": "MockProvider",
+    "model": "{{ model }}",
+    "object": "chat.completion",
+    "created": {{ timestamp() }},
+    "choices": [
+        {
+            "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                    {
+                        "id": "call_mock_{{ random_int(min=1000, max=9999) }}",
+                        "type": "function",
+                        "function": {
+                            "name": "{{ json.tools.0.function.name | default(value='mock_tool') }}",
+                            "arguments": "{}"
+                        }
+                    }
+                ]
+            },
+            "index": 0,
+            "finish_reason": "tool_calls"
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 51,
+        "completion_tokens": 14,
+        "total_tokens": 65,
+        "total_cost": 0.00065
+    }
+}
+{% else %}
 {
     "id": "gen-{{ uuid() }}",
     "provider": "MockProvider",
@@ -21,3 +97,4 @@
         "total_cost": 0.00015
     }
 }
+{% endif %}

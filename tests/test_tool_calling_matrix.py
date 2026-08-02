@@ -64,8 +64,8 @@ BINARY = "./target/release/vidaimock"
 # known_broken  : issue reference. These are EXPECTED to fail until fixed; they
 #                 are reported separately so the suite's exit code stays
 #                 meaningful while the bug is open.
-# unimplemented : provider has no tool branching in EITHER mode. Distinct from
-#                 a streaming regression: nothing was lost, it was never built.
+# non_stream_only: provider declares no `stream:` block, so only the
+#                 non-streaming cell is asserted.
 # --------------------------------------------------------------------------
 
 def openai_chat_body(stream, with_result=False):
@@ -201,16 +201,16 @@ MATRIX = [
         "text_markers": ['"output_text"', "mock response complete"],
         "second_turn": True,
     },
-    # Tool calling was never implemented for these in EITHER mode: they point at
-    # chat_completion.json.j2, which has no tool branch (unlike chat.json.j2).
-    # Tracked so the gap stays visible; not counted as failures.
+    # OpenAI-compatible providers. Tool calling was added in VM-013 — before
+    # that they pointed at templates with no tool branch at all and echoed the
+    # request back regardless of `tools`.
     {
         "name": "azure-openai",
         "path": "/openai/deployments/gpt-4/chat/completions?api-version=2024-02-01",
         "body": openai_chat_body,
         "tool_markers": ['"tool_calls"'],
         "text_markers": ['"content"'],
-        "unimplemented": True,
+        "second_turn": True,
     },
     {
         "name": "mistral",
@@ -218,15 +218,19 @@ MATRIX = [
         "body": openai_chat_body,
         "tool_markers": ['"tool_calls"'],
         "text_markers": ['"content"'],
-        "unimplemented": True,
+        "second_turn": True,
     },
+    # Groq and OpenRouter declare no `stream:` block, so they are
+    # non-streaming only. Asserting a streaming contract they do not offer
+    # would be a false failure.
     {
         "name": "groq",
         "path": "/groq/v1/chat/completions",
         "body": openai_chat_body,
         "tool_markers": ['"tool_calls"'],
         "text_markers": ['"content"'],
-        "unimplemented": True,
+        "second_turn": True,
+        "non_stream_only": True,
     },
     {
         "name": "openrouter",
@@ -234,7 +238,8 @@ MATRIX = [
         "body": openai_chat_body,
         "tool_markers": ['"tool_calls"'],
         "text_markers": ['"content"'],
-        "unimplemented": True,
+        "second_turn": True,
+        "non_stream_only": True,
     },
 ]
 
@@ -357,7 +362,6 @@ def main():
 
     real_failures = []
     known = []
-    unimpl = []
 
     try:
         print(f"Tool-calling parity matrix -> {base}\n")
@@ -372,18 +376,21 @@ def main():
                 turn = "tools+result" if with_result else "tools"
                 cells = []
                 for stream in (False, True):
-                    ok, why, _ = check(base, spec, stream, with_result)
                     mode = "stream" if stream else "non-stream"
+
+                    # Providers with no `stream:` block do not offer a
+                    # streaming contract; asserting one would fail falsely.
+                    if stream and spec.get("non_stream_only"):
+                        cells.append("n/a")
+                        continue
+
+                    ok, why, _ = check(base, spec, stream, with_result)
 
                     broken_map = (spec.get("known_broken_second_turn", {})
                                   if with_result else spec.get("known_broken", {}))
                     issue = broken_map.get(mode)
 
-                    if spec.get("unimplemented"):
-                        cells.append("n/a" if not ok else "PASS")
-                        if not ok:
-                            unimpl.append((spec["name"], mode, turn, why))
-                    elif ok:
+                    if ok:
                         cells.append("PASS")
                     elif issue:
                         cells.append(f"KNOWN({issue})")
@@ -399,12 +406,6 @@ def main():
             print("Known-broken (expected until fixed):")
             for name, mode, turn, issue, why in known:
                 print(f"  [{issue}] {name} / {mode} / {turn}: {why}")
-            print()
-        if unimpl:
-            print("Not implemented in either mode (feature gap, not a regression):")
-            for name, mode, turn, why in unimpl:
-                if mode == "non-stream":
-                    print(f"  {name} / {turn}: {why}")
             print()
         if real_failures:
             print("FAILURES:")

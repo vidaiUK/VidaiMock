@@ -1,2 +1,14 @@
-{"id":"chatcmpl-{{ uuid() }}","object":"chat.completion.chunk","created":{{ timestamp() }},"model":"{{ json.model }}","choices":[{"index":0,"delta":{"content":"{{ chunk }}"},"finish_reason":null}]}
+{#- Generic OpenAI-compatible streaming chunk.
 
+    Shared by azure-openai, mistral and openai-compatible.
+
+    Two chunk shapes — the streaming engine decides which:
+      - string chunk    (text response)  -> emit as a content delta
+      - structured chunk (tool_calls)    -> emit as a tool_calls delta
+
+    Without the structured branch a tool call is interpolated into
+    "{{ chunk }}" and Tera stringifies it as the literal "[[object]]" — the
+    same defect fixed for /v1/responses in VM-012 (issue #8). Mirrors the
+    inline chunk template in providers/openai.yaml (VM-013).
+-#}
+{"id":"chatcmpl-{{ uuid() }}","object":"chat.completion.chunk","created":{{ timestamp() }},"model":"{{ json.model }}","choices":[{"index":0,"delta":{% if chunk is string %}{"content":"{{ chunk }}"}{% else %}{"tool_calls":{{ chunk | json_encode() }}}{% endif %},"finish_reason":null}]}
