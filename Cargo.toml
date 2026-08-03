@@ -18,11 +18,11 @@ authors = ["Vidai UK"]
 # the library would build but serve nothing. Everything else (tests, docs,
 # docker scaffolding) is excluded to keep the package small.
 include = [
-    "src/**/*",
-    "config/**/*",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md",
+    "/src/**/*",
+    "/config/**/*",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
 ]
 
 # Both targets ship from one crate: the binary is the CLI, the library lets
