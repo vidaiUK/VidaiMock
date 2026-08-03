@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025 Vidai UK.
+ * Copyright (c) 2026 Vidai UK.
  * Author: n@gu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -131,6 +131,32 @@ pub struct Cli {
 impl AppConfig {
     pub fn load() -> Result<Self, config::ConfigError> {
         let args = Cli::parse();
+        Self::build_config(args)
+    }
+
+    /// Build a config for embedded (library) use.
+    ///
+    /// Unlike [`load`](Self::load) this never calls `Cli::parse()`, which
+    /// would try to parse the *host* process's argv — in a test binary that
+    /// means cargo's own arguments. Everything else (config file, environment
+    /// variables, defaults) behaves exactly as it does for the CLI, so an
+    /// embedded server honours the same `mock-server.toml` and `VIDAIMOCK_*`
+    /// variables.
+    pub fn for_embedded(config_dir: &std::path::Path, isolated: bool) -> Result<Self, config::ConfigError> {
+        let args = Cli {
+            host: None,
+            port: None,
+            workers: None,
+            config: PathBuf::from("mock-server.toml"),
+            config_dir: Some(config_dir.to_path_buf()),
+            latency: None,
+            mode: None,
+            response_file: None,
+            endpoints: None,
+            format: None,
+            content_type: None,
+            isolated,
+        };
         Self::build_config(args)
     }
 

@@ -1,7 +1,17 @@
 [package]
 name = "vidaimock"
-version = "0.2.11"
+version = "0.3.0"
 edition = "2021"
+
+# Both targets ship from one crate: the binary is the CLI, the library lets
+# Rust tests embed the same server in-process (issue #9).
+[lib]
+name = "vidaimock"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vidaimock"
+path = "src/main.rs"
 
 [dependencies]
 axum = "0.8.7"

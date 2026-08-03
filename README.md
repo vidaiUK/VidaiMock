@@ -7,6 +7,8 @@
 
 **Batteries-included mock server for LLM APIs and agents** — works instantly with OpenAI, Anthropic, Gemini, Bedrock, and more. Run ADK / LangGraph / LangChain agentic workflows against it without a single live-provider token. Zero config required.
 
+Run it however suits you: **Docker** for the fastest start, a **standalone binary** with no runtime to install, **from source** when you want custom providers compiled in, or as a **Rust library** embedded directly in your integration tests.
+
 ## ⚡ 30-Second Demo
 
 **Docker Compose:**
@@ -32,6 +34,17 @@ tar -xzf vidaimock-macos-arm64.tar.gz && cd vidaimock
 curl -N http://localhost:8100/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "gpt-4", "stream": true, "messages": [{"role": "user", "content": "Hello!"}]}'
+```
+
+**Rust library** (in-process, for integration tests):
+
+```rust
+let server = vidaimock::MockServer::builder()
+    .bind("127.0.0.1:0")
+    .start()
+    .await?;
+
+// Point the system under test at server.base_url(), then assert.
 ```
 
 Watch tokens appear one by one — that's realistic LLM simulation.
@@ -198,6 +211,37 @@ git clone https://github.com/vidaiUK/VidaiMock.git
 cd VidaiMock && cargo build --release
 ./target/release/vidaimock
 ```
+
+### 📚 Rust library
+
+For Rust integration tests, embed the server in your test process instead of
+managing an external one — no download, no port juggling, no health polling,
+no teardown.
+
+```toml
+[dev-dependencies]
+vidaimock = "0.3"
+```
+
+```rust
+use vidaimock::MockServer;
+
+#[tokio::test]
+async fn my_agent_calls_openai() -> Result<(), Box<dyn std::error::Error>> {
+    let server = MockServer::builder()
+        .bind("127.0.0.1:0")     // ephemeral port — safe in parallel tests
+        .start()
+        .await?;
+
+    // Point the system under test at this URL.
+    let base_url = server.base_url();
+
+    server.shutdown().await?;
+    Ok(())
+}
+```
+
+Same providers, same templates, same behaviour as the binary.
 
 ### 🔐 Verify release signatures (cosign)
 

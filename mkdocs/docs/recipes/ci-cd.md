@@ -33,6 +33,11 @@ docker rm -f vidaimock
 
 No API keys needed — VidaiMock ignores `Authorization` on mock routes.
 
+!!! tip "Rust projects"
+    If your tests are in Rust, you can skip this orchestration entirely —
+    [embed the server in your test process](rust-library.md) and drop the
+    start/wait/teardown steps above.
+
 ### Why pin by digest
 
 A digest-pinned image is bit-identical every CI run, no matter what the
