@@ -5,7 +5,7 @@ site_description: >-
 site_url: https://vidai.uk/docs/mock/
 repo_url: https://github.com/vidaiUK/VidaiMock
 repo_name: vidaiUK/VidaiMock
-copyright: Copyright &copy; 2025 Vidai UK — Apache 2.0
+copyright: Copyright &copy; 2026 Vidai UK — Apache 2.0
 
 # Docs live in this folder; site builds to ./site (gitignored).
 docs_dir: docs
@@ -105,6 +105,7 @@ nav:
   - Recipes:
       - Docker Compose: recipes/docker-compose.md
       - CI/CD Integration: recipes/ci-cd.md
+      - Rust Library: recipes/rust-library.md
       - Cookbook: recipes/cookbook.md
   - Reference:
       - Architecture: reference/architecture.md

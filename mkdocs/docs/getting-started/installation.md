@@ -105,6 +105,27 @@ compile time, so the binary works standalone with no files alongside it. A
 local `config/` directory or `--config-dir` only *overrides* the embedded
 defaults — see [Overriding bundled defaults](../configuration/overriding.md).
 
+## Rust library
+
+Rust projects can embed the server directly in their tests rather than running
+it as a separate process:
+
+```toml
+[dev-dependencies]
+vidaimock = "0.3"
+```
+
+```rust
+use vidaimock::MockServer;
+
+let server = MockServer::builder().bind("127.0.0.1:0").start().await?;
+let base_url = server.base_url();
+```
+
+This is the same server, providers and templates as the binary — it simply runs
+inside your test process. See [Rust Library](../recipes/rust-library.md) for
+parallel tests, config overrides, and shutdown semantics.
+
 ## Verify release signatures (cosign)
 
 Every release artefact — the Docker image, the tarball, and the bare binary

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025 Vidai UK.
+ * Copyright (c) 2026 Vidai UK.
  * Author: n@gu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,18 +40,15 @@ use axum::{
 
 pub async fn start_server(config: AppConfig, metrics_handle: PrometheusHandle, registry: Arc<crate::provider::ProviderRegistry>) -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("{}:{}", config.host, config.port);
-    let port = config.port;
-    
-    // Bind the listener first to catch port-in-use errors early
-    let listener = match TcpListener::bind(&addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("ERROR: Failed to bind to address {}: {}", addr, e);
-            eprintln!("       This usually means the port {} is already in use by another process.", port);
-            eprintln!("       Try using a different port with --port <PORT>.");
-            std::process::exit(1);
-        }
-    };
+
+    // Bind the listener first to catch port-in-use errors early.
+    //
+    // This returns Err rather than exiting: start_server is reachable from the
+    // library API, and a library must never terminate its host process — a
+    // failed bind inside someone's test suite would take down their whole test
+    // runner. main() turns this back into the same message and exit code the
+    // CLI has always produced.
+    let listener = TcpListener::bind(&addr).await?;
     
     // Useful when passing port 0 (which means "pick an available port").
     let local_addr = listener.local_addr().unwrap();

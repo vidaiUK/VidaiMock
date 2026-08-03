@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025 Vidai UK.
+ * Copyright (c) 2026 Vidai UK.
  * Author: n@gu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");

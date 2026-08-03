@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025 Vidai UK.
+ * Copyright (c) 2026 Vidai UK.
  * Author: n@gu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,22 +18,16 @@
  */
 
 use mimalloc::MiMalloc;
-use crate::config::AppConfig;
-use crate::server::start_server;
+use vidaimock::internal::config::AppConfig;
+use vidaimock::internal::server::start_server;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 use metrics_exporter_prometheus::PrometheusBuilder;
 
+// Process-global. Belongs to the binary, never the library: a crate cannot
+// choose the allocator for its host, and only one may be set per process.
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
-
-mod config;
-// mod formats; // Removed
-mod handlers;
-mod replacer;
-mod server;
-mod provider;
-mod aws_event_stream; // Added for Bedrock streaming
 
 
 
@@ -81,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Diagnostic: list embedded assets. Suppressed in isolated mode
         // because they won't be loaded — printing them is misleading.
         if !config.isolated {
-            for file in crate::provider::Asset::iter() {
+            for file in vidaimock::internal::provider::Asset::iter() {
                 tracing::debug!("Embedded Asset: {}", file);
             }
         }
@@ -90,11 +84,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!(endpoints = ?endpoints, "Registered Endpoints");
     }
 
-    let registry = crate::provider::init_registry_with_options(&config.config_dir, config.isolated);
+    let registry = vidaimock::internal::provider::init_registry_with_options(
+        &config.config_dir, config.isolated);
 
-    tokio::runtime::Builder::new_multi_thread()
+    let addr = format!("{}:{}", config.host, config.port);
+    let port = config.port;
+
+    let result = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(workers as usize)
         .enable_all()
         .build()?
-        .block_on(start_server(config, handle, registry))
+        .block_on(start_server(config, handle, registry));
+
+    // start_server now returns bind failures instead of exiting, so the
+    // library can surface them. The CLI keeps its original message and
+    // non-zero exit.
+    if let Err(e) = result {
+        eprintln!("ERROR: Failed to bind to address {}: {}", addr, e);
+        eprintln!("       This usually means the port {} is already in use by another process.", port);
+        eprintln!("       Try using a different port with --port <PORT>.");
+        std::process::exit(1);
+    }
+
+    Ok(())
 }
