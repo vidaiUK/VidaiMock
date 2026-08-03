@@ -2,6 +2,28 @@
 name = "vidaimock"
 version = "0.3.0"
 edition = "2021"
+rust-version = "1.70"
+description = "Batteries-included mock server for LLM APIs and agents — OpenAI, Anthropic, Gemini, Bedrock and more. Run agentic workflows with zero provider tokens."
+license = "Apache-2.0"
+repository = "https://github.com/vidaiUK/VidaiMock"
+homepage = "https://vidai.uk"
+documentation = "https://docs.rs/vidaimock"
+readme = "README.md"
+keywords = ["mock", "llm", "openai", "anthropic", "testing"]
+categories = ["development-tools::testing", "web-programming::http-server"]
+authors = ["Vidai UK"]
+
+# The bundled providers and templates are embedded at compile time via
+# rust-embed, so config/ MUST ship inside the published package — without it
+# the library would build but serve nothing. Everything else (tests, docs,
+# docker scaffolding) is excluded to keep the package small.
+include = [
+    "src/**/*",
+    "config/**/*",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+]
 
 # Both targets ship from one crate: the binary is the CLI, the library lets
 # Rust tests embed the same server in-process (issue #9).
