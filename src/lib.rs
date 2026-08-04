@@ -133,6 +133,8 @@ pub struct MockServerBuilder {
     bind: String,
     config_dir: PathBuf,
     isolated: bool,
+    latency_ms: Option<u64>,
+    mode: Option<String>,
 }
 
 impl MockServerBuilder {
@@ -141,6 +143,8 @@ impl MockServerBuilder {
             bind: "127.0.0.1:0".to_string(),
             config_dir: PathBuf::from("config"),
             isolated: false,
+            latency_ms: None,
+            mode: None,
         }
     }
 
@@ -170,6 +174,36 @@ impl MockServerBuilder {
         self
     }
 
+    /// Artificial delay applied to every response, in milliseconds.
+    /// Mirrors `--latency` on the CLI. Defaults to `0` (no delay).
+    ///
+    /// Useful for mimicking provider latency, and for driving a client past
+    /// its own timeout to check that its failure handling works:
+    ///
+    /// ```no_run
+    /// # use vidaimock::MockServer;
+    /// # async fn f() -> Result<(), Box<dyn std::error::Error>> {
+    /// let server = MockServer::builder()
+    ///     .latency_ms(2500)      // longer than the client's timeout
+    ///     .start()
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// Individual requests can override this with the `X-Vidai-Latency`
+    /// header, without restarting the server.
+    pub fn latency_ms(mut self, ms: u64) -> Self {
+        self.latency_ms = Some(ms);
+        self
+    }
+
+    /// Operation mode: `"benchmark"` (default, no artificial delay),
+    /// `"realistic"`, or `"debug"`. Mirrors `--mode` on the CLI.
+    pub fn mode(mut self, mode: impl Into<String>) -> Self {
+        self.mode = Some(mode.into());
+        self
+    }
+
     /// Bind the listener and start serving.
     ///
     /// Returns as soon as the socket is bound, so the server is ready for
@@ -195,6 +229,15 @@ impl MockServerBuilder {
         // Report the real port on /status, matching CLI behaviour.
         config.port = addr.port();
         config.host = addr.ip().to_string();
+
+        // Builder overrides win over file/env config, mirroring how the CLI's
+        // --latency and --mode flags are applied last.
+        if let Some(ms) = self.latency_ms {
+            config.latency.base_ms = ms;
+        }
+        if let Some(mode) = &self.mode {
+            config.latency.mode = mode.clone();
+        }
 
         let registry = provider::init_registry_with_options(&self.config_dir, self.isolated);
 
