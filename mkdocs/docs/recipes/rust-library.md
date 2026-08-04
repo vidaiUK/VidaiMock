@@ -126,6 +126,36 @@ let server = MockServer::builder()
 See [Overriding bundled defaults](../configuration/overriding.md) for how the
 two layers interact.
 
+## Simulating latency
+
+Add an artificial delay to every response — useful for mimicking real provider
+latency, and for pushing a client past its own timeout to check that its
+failure handling actually works:
+
+```rust
+let server = MockServer::builder()
+    .bind("127.0.0.1:0")
+    .mode("realistic")
+    .latency_ms(40)          // ~40ms per response
+    .start()
+    .await?;
+```
+
+To fail a single request without restarting the server, use the
+`X-Vidai-Latency` header:
+
+```rust
+client.post(format!("{}/v1/chat/completions", server.base_url()))
+    .header("X-Vidai-Latency", "2500")   // past a 1s client timeout
+    .json(&body)
+    .send()
+    .await?;
+```
+
+This is how gateway and router projects rehearse their failure gates: point the
+system under test at the mock, raise the latency past its timeout, and confirm
+it fails closed rather than silently passing.
+
 ## Error handling
 
 Startup problems are returned, never fatal — a library must not terminate its
