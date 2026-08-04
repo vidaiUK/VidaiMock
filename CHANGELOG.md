@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-08-04
+### Added
+- `MockServerBuilder::latency_ms()` and `::mode()` — the library equivalents
+  of `--latency` and `--mode`. Without them a Rust consumer could start the
+  server in-process but not slow it down, so the CLI's soak/fault-injection
+  pattern had no library equivalent:
+
+  ```rust
+  let server = MockServer::builder()
+      .mode("realistic")
+      .latency_ms(2500)   // past the client's timeout
+      .start()
+      .await?;
+  ```
+
+  Builder settings are applied after file and environment config, mirroring
+  how the CLI applies its flags last.
+- `tests/gateway_soak_contract.rs` — pins the behaviour long-running gateway
+  soak tests depend on: sustained concurrent load with no errors, `/health`
+  staying live under load, latency actually being applied (both configured
+  and via `X-Vidai-Latency`), all three soak endpoints staying correct, SSE
+  framing holding across repeated streams, and the server staying correct
+  after sustained traffic.
+
+### Notes
+- Purely additive. No existing behaviour changes: latency still defaults to
+  off, and the CLI is untouched.
+- The contract tests are modelled on a real deployment — NVIDIA NeMo
+  Switchyard uses VidaiMock as the hermetic backend for its release soak
+  rehearsal ([Switchyard#176](https://github.com/NVIDIA-NeMo/Switchyard/pull/176)).
+
 ## [0.3.0] - 2026-08-03
 ### Added
 - **Rust library target** — embed the mock server directly in Rust
