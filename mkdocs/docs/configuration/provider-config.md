@@ -18,6 +18,9 @@ response_template: "my/template.j2"  # Tera template for 2xx responses
 error_template: "my/error.j2"        # Tera template for 4xx/5xx responses
 status_code: "200"                   # static, or a Tera expression
 priority: 10                         # higher wins when multiple matchers hit
+response_headers:                    # extra headers; values are Tera templates
+  x-request-id: "req_{{ uuid }}"
+  retry-after: "{% if status_code == 429 %}2{% endif %}"   # empty -> not sent
 
 stream:
   enabled: true
@@ -65,6 +68,39 @@ Controls the HTTP status. Accepts:
 Both `{{ … }}` and `{% … %}` forms are rendered. This is how the bundled
 Anthropic provider enforces the `max_tokens` requirement.
 
+### `response_headers`
+
+Extra headers on every response from this provider: normal, streaming and
+error. Each value is a Tera template rendered with the request context plus
+`status_code`, so headers can depend on the outcome. A value that renders empty
+is not sent. A `content-type` entry overrides the default. The bundled OpenAI
+and Anthropic providers use this to send request ids, rate-limit headers, and
+`retry-after` on 429/503.
+
+### `methods`
+
+HTTP methods the provider answers, e.g. `["GET", "DELETE"]`. Default: `["POST"]`.
+Templates can branch on the `method` variable.
+
+### `body_encoding`
+
+`base64`: the rendered body is base64 and is decoded before sending, for binary
+responses such as audio or video. Pair it with a `content-type` in
+`response_headers`.
+
+### `scenarios`
+
+`{dir, key}`: replay scripted responses from `<config-dir>/scenarios/<dir>/`,
+picked by the `X-Vidai-Scenario` header or the rendered `key`. See
+[Scenario playback](../streaming.md#scenario-playback).
+
+### Request bodies
+
+Templates see the request body as `json`. JSON bodies are passed through;
+`multipart/form-data` becomes an object of its fields, with file parts as
+`{"filename", "content_type", "size"}` (multipart sends numbers as strings, so
+use `| int`). An empty or non-JSON body is `{}`.
+
 ### `stream`
 
 Present (and `enabled: true`) to make the provider stream. `lifecycle`
@@ -72,6 +108,16 @@ defines `on_start` / `on_chunk` / `on_stop` templates. `frame_format: raw`
 hands full SSE framing to the templates (needed for typed-event providers
 like the Responses API and Anthropic). See
 [Writing templates](templates.md) and [Streaming](../streaming.md).
+
+`encoding: aws-event-stream` sends the binary AWS event stream that Bedrock
+uses instead of SSE. Templates write events in the same `event:` / `data:`
+form as raw SSE, and one template may emit several events. `aws_payload`
+picks the Bedrock flavour:
+
+| `aws_payload` | Wire shape | Used by |
+|---|---|---|
+| `bytes` (default) | every event is `:event-type chunk` with payload `{"bytes": "<base64 of the data JSON>"}`; `event:` lines are ignored | InvokeModelWithResponseStream |
+| `json` | `:event-type` is the template's `event:` name; payload is the data JSON as written | ConverseStream |
 
 ## Chaos & error injection summary
 

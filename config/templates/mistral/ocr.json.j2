@@ -1,0 +1,12 @@
+{#- Mistral OCR response. `pages` in the request selects page indices. -#}
+{%- set pages = json.pages | default(value=[0]) -%}
+{
+  "pages": [
+    {%- for p in pages %}
+    {"index": {{ p }}, "markdown": "# Page {{ p + 1 }}\n\nMock OCR text from VidaiMock.", "images": [], "dimensions": {"dpi": 200, "height": 2200, "width": 1700}}{% if not loop.last %},{% endif %}
+    {%- endfor %}
+  ],
+  "model": "{{ json.model | default(value='mistral-ocr-latest') }}",
+  "document_annotation": null,
+  "usage_info": {"pages_processed": {{ pages | length }}, "doc_size_bytes": null}
+}

@@ -24,6 +24,7 @@ Usage: vidaimock [OPTIONS]
 | `--endpoints <PATHS>` | — | Comma-separated endpoint list (overrides config). |
 | `--format <FORMAT>` | — | Response format for default endpoints (`openai`, `anthropic`, …). |
 | `--content-type <TYPE>` | — | Override the `Content-Type` header. |
+| `--max-body-mb <MB>` | `32` | Largest request body accepted; larger bodies get 413. Env: `VIDAIMOCK_MAX_BODY_MB`; TOML: `max_body_mb`. |
 | `-h, --help` | — | Print help. |
 | `-V, --version` | — | Print version. |
 
@@ -70,6 +71,9 @@ They override the configured defaults **for that single request**.
 | `X-Vidai-Chaos-Malformed: <pct>` | Probability of a deliberately malformed (non-JSON) body. |
 | `X-Vidai-Chaos-Trickle: <ms>` | Per-chunk delay during streaming. |
 | `X-Vidai-Chaos-Disconnect: <pct>` | Probability of a mid-stream disconnect. |
+| `X-Vidai-Usage: <k=v,…>` | Exact usage numbers, rendered in each provider's own shape. Keys: `input`, `output`, `cached`, `cache_write`, `reasoning`. E.g. `input=22740,output=12,cached=22515,reasoning=41`. OpenAI/Gemini count cached tokens inside the input; Anthropic reports them separately; Gemini adds `reasoning` to the total. |
+| `X-Vidai-Output-Tokens: <n\|max>` | Generate `n` words of output (one per stream chunk) and report `n` output tokens. `max` uses the request's `max_tokens` / `max_completion_tokens` / `max_output_tokens` / `generationConfig.maxOutputTokens`. Capped at 100 000. |
+| `X-Vidai-Scenario: <id>` | Replay scenario `<id>` on providers that declare `scenarios`. See [Scenario playback](../streaming.md#scenario-playback). |
 
 ## URL query parameters
 

@@ -1,0 +1,15 @@
+name: "openai-completions"
+# Legacy /v1/completions (text_completion), streaming and non-streaming.
+matcher: "^/v1/completions$"
+response_template: "openai/completion.json.j2"
+error_template: "openai/error.json.j2"
+response_headers:
+  x-request-id: "req_{{ uuid | replace(from='-', to='') }}"
+stream:
+  enabled: true
+  frame_format: raw
+  lifecycle:
+    on_chunk:
+      template_body: 'data: {"id":"cmpl-{{ uuid }}","object":"text_completion","created":{{ timestamp }},"model":"{{ json.model | default(value="gpt-3.5-turbo-instruct") }}","choices":[{"text":{{ chunk | json_encode() }},"index":0,"logprobs":null,"finish_reason":null}]}'
+    on_stop:
+      template_path: "openai/completion_stream_stop.sse.j2"

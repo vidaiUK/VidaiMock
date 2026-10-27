@@ -1,13 +1,21 @@
 name: "bedrock"
+# InvokeModel / InvokeModelWithResponseStream for Anthropic Claude on Bedrock.
+# The body is the Anthropic Messages shape, so the Anthropic templates are reused.
 matcher: "^/model/.*/invoke(-with-response-stream)?$"
 request_mapping:
-  prompt: "{{ json.messages.0.content.0.text }}"
+  # /model/{model_id}/invoke -> report the requested model id
+  model: "{{ path_segments.1 }}"
 response_template: "bedrock/invoke.json.j2"
 stream:
   enabled: true
+  # Binary AWS event stream: each Anthropic event is sent as a `chunk` event
+  # whose payload is {"bytes": "<base64 of the event JSON>"}.
   encoding: "aws-event-stream"
-  format: '{{ chunk }}'
+  aws_payload: "bytes"
   lifecycle:
+    on_start:
+      template_path: "anthropic/stream/start.json.j2"
     on_chunk:
-       template_body: '{"chunk":{"bytes":"{{ chunk | b64encode }}"}}'
-
+      template_path: "anthropic/stream/delta.json.j2"
+    on_stop:
+      template_path: "anthropic/stream/stop.json.j2"

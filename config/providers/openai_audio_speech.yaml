@@ -1,0 +1,10 @@
+name: "openai-audio-speech"
+# POST /v1/audio/speech -> audio bytes. Short silent clips: valid mp3, wav and
+# pcm; other formats get the mp3 bytes with their own content type.
+matcher: "^/v1/audio/speech$"
+error_template: "openai/error.json.j2"
+response_template: "openai/audio_speech.b64.j2"
+body_encoding: base64
+response_headers:
+  content-type: "{% set f = json.response_format | default(value='mp3') %}{% if status_code >= 400 %}application/json{% elif f == 'wav' %}audio/wav{% elif f == 'pcm' %}audio/pcm{% elif f == 'opus' %}audio/opus{% elif f == 'aac' %}audio/aac{% elif f == 'flac' %}audio/flac{% else %}audio/mpeg{% endif %}"
+  x-request-id: "req_{{ uuid | replace(from='-', to='') }}"

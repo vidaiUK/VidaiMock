@@ -1,0 +1,9 @@
+name: "openai-video-content"
+# GET /v1/videos/{id}/content -> MP4 bytes (a minimal placeholder file header).
+matcher: "^/v1/videos/[^/]+/content$"
+methods: ["GET"]
+priority: 10
+response_body: "AAAAGGZ0eXBpc29tAAACAGlzb21tcDQx"
+body_encoding: base64
+response_headers:
+  content-type: "{% if status_code >= 400 %}application/json{% else %}video/mp4{% endif %}"

@@ -1,0 +1,8 @@
+{#- Legacy completions stream end: finish_reason chunk, optional usage chunk, [DONE]. -#}
+data: {"id":"cmpl-{{ uuid }}","object":"text_completion","created":{{ timestamp }},"model":"{{ json.model | default(value='gpt-3.5-turbo-instruct') }}","choices":[{"text":"","index":0,"logprobs":null,"finish_reason":"stop"}]}
+
+{% if json.stream_options and json.stream_options.include_usage -%}
+data: {"id":"cmpl-{{ uuid }}","object":"text_completion","created":{{ timestamp }},"model":"{{ json.model | default(value='gpt-3.5-turbo-instruct') }}","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":{{ chunk_count }},"total_tokens":{{ 5 + chunk_count }}}}
+
+{% endif -%}
+data: [DONE]

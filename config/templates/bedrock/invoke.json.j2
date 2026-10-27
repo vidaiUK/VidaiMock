@@ -1,21 +1,2 @@
-{
-    "output": {
-        "message": {
-            "role": "assistant",
-            "content": [
-                {
-                    "text": "Hello from Bedrock Mock! You said: {{ prompt | default(value="something") }}"
-                }
-            ]
-        }
-    },
-    "stopReason": "end_turn",
-    "usage": {
-        "inputTokens": 10,
-        "outputTokens": 5,
-        "totalTokens": 15
-    },
-    "metrics": {
-        "latencyMs": {{ random_int(min=50, max=200) }}
-    }
-}
+{#- Bedrock InvokeModel for Anthropic Claude: the body is the Anthropic Messages shape. -#}
+{% include "anthropic/message.json.j2" %}

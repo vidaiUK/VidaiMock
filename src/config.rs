@@ -44,6 +44,14 @@ pub struct AppConfig {
     /// batteries-included experience.
     #[serde(default)]
     pub isolated: bool,
+    /// Largest request body accepted, in MiB (larger -> 413). Default 32.
+    /// Env: `VIDAIMOCK_MAX_BODY_MB`; CLI: `--max-body-mb`.
+    #[serde(default = "default_max_body_mb")]
+    pub max_body_mb: u64,
+}
+
+fn default_max_body_mb() -> u64 {
+    32
 }
 
 fn default_host() -> String {
@@ -126,6 +134,10 @@ pub struct Cli {
     /// exactly what you declare. Equivalent env var: `VIDAIMOCK_ISOLATED=true`.
     #[arg(long)]
     pub isolated: bool,
+
+    /// Largest request body accepted, in MiB (default 32). Larger bodies get 413.
+    #[arg(long)]
+    pub max_body_mb: Option<u64>,
 }
 
 impl AppConfig {
@@ -156,6 +168,7 @@ impl AppConfig {
             format: None,
             content_type: None,
             isolated,
+            max_body_mb: None,
         };
         Self::build_config(args)
     }
@@ -204,6 +217,9 @@ impl AppConfig {
         // serde defaults above.
         if args.isolated {
             config.isolated = true;
+        }
+        if let Some(mb) = args.max_body_mb {
+            config.max_body_mb = mb;
         }
 
         config.response_file = args.response_file;

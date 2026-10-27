@@ -1,0 +1,11 @@
+{#- Legacy /v1/completions response (text_completion). -#}
+{
+  "id": "cmpl-{{ uuid }}",
+  "object": "text_completion",
+  "created": {{ timestamp }},
+  "model": "{{ json.model | default(value='gpt-3.5-turbo-instruct') }}",
+  "choices": [
+    {"text": "This is a mock completion from VidaiMock.", "index": 0, "logprobs": null, "finish_reason": "stop"}
+  ],
+  "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}
+}

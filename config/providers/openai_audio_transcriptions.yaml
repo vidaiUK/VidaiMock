@@ -1,0 +1,9 @@
+name: "openai-audio-transcriptions"
+# POST /v1/audio/transcriptions and /v1/audio/translations (multipart upload).
+# Honours response_format: json (default), text, verbose_json, srt, vtt.
+matcher: "^/v1/audio/(transcriptions|translations)$"
+error_template: "openai/error.json.j2"
+response_template: "openai/audio_transcription.j2"
+response_headers:
+  content-type: "{% set f = json.response_format | default(value='json') %}{% if status_code >= 400 %}application/json{% elif f == 'text' or f == 'srt' %}text/plain; charset=utf-8{% elif f == 'vtt' %}text/vtt; charset=utf-8{% else %}application/json{% endif %}"
+  x-request-id: "req_{{ uuid | replace(from='-', to='') }}"

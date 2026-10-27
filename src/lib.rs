@@ -61,6 +61,7 @@ use tokio::task::JoinHandle;
 mod aws_event_stream;
 mod handlers;
 mod replacer;
+mod scenario;
 
 // Reachable from the binary via `internal`, hidden from docs and excluded
 // from the public API contract. See the `internal` module below.
@@ -135,6 +136,7 @@ pub struct MockServerBuilder {
     isolated: bool,
     latency_ms: Option<u64>,
     mode: Option<String>,
+    max_body_mb: Option<u64>,
 }
 
 impl MockServerBuilder {
@@ -145,6 +147,7 @@ impl MockServerBuilder {
             isolated: false,
             latency_ms: None,
             mode: None,
+            max_body_mb: None,
         }
     }
 
@@ -204,6 +207,13 @@ impl MockServerBuilder {
         self
     }
 
+    /// Largest request body accepted, in MiB; larger bodies get 413.
+    /// Mirrors `--max-body-mb` on the CLI. Defaults to 32.
+    pub fn max_body_mb(mut self, mb: u64) -> Self {
+        self.max_body_mb = Some(mb);
+        self
+    }
+
     /// Bind the listener and start serving.
     ///
     /// Returns as soon as the socket is bound, so the server is ready for
@@ -237,6 +247,9 @@ impl MockServerBuilder {
         }
         if let Some(mode) = &self.mode {
             config.latency.mode = mode.clone();
+        }
+        if let Some(mb) = self.max_body_mb {
+            config.max_body_mb = mb;
         }
 
         let registry = provider::init_registry_with_options(&self.config_dir, self.isolated);

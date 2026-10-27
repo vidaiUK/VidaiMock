@@ -18,7 +18,7 @@
       "content": {
         "parts": [
           {% if chunk is string %}
-          {"text": "{{ chunk }}"}
+          {"text": {{ chunk | json_encode() }}}
           {% else %}
           {{ chunk | json_encode() }}
           {% endif %}
@@ -29,6 +29,6 @@
       "index": 0
     }
   ],
-  "modelVersion": "gemini-2.5-flash",
+  "modelVersion": "{{ model }}",
   "responseId": "mock-{{ uuid }}"
 }

@@ -1,0 +1,9 @@
+name: "openai-videos"
+# Sora video jobs: POST /v1/videos (create, queued), GET /v1/videos (list),
+# GET /v1/videos/{id} (completed), DELETE /v1/videos/{id}.
+matcher: "^/v1/videos(/[^/]+)?$"
+methods: ["GET", "POST", "DELETE"]
+error_template: "openai/error.json.j2"
+response_template: "openai/video.json.j2"
+response_headers:
+  x-request-id: "req_{{ uuid | replace(from='-', to='') }}"

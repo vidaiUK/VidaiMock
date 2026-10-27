@@ -1,0 +1,9 @@
+name: "anthropic-count-tokens"
+# POST /v1/messages/count_tokens -> {"input_tokens": N}. N is a rough estimate
+# (about 4 characters per token over messages, system and tools).
+matcher: "^/v1/messages/count_tokens$"
+priority: 10
+error_template: "anthropic/error.json.j2"
+response_template: "anthropic/count_tokens.json.j2"
+response_headers:
+  request-id: "req_{{ uuid | replace(from='-', to='') }}"

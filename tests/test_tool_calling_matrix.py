@@ -198,7 +198,7 @@ MATRIX = [
                 "response.function_call_arguments.done",
             ],
         },
-        "text_markers": ['"output_text"', "mock response complete"],
+        "text_markers": ['"output_text"', "Based on the tool results"],
         "second_turn": True,
     },
     # OpenAI-compatible providers. Tool calling was added in VM-013 — before

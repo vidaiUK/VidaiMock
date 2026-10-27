@@ -98,7 +98,10 @@ The bundled OpenAI chat template, conceptually:
 
 Streaming providers use a `lifecycle` block (`on_start`, `on_chunk`,
 `on_stop`) plus optional `frame_format: raw` for full SSE control. The
-per-chunk content is available as `chunk`. Details:
+per-chunk content is available as `chunk`, its zero-based position as
+`chunk_index`, and the total number of chunks as `chunk_count` (also set in
+`on_start` and `on_stop`). Use `chunk_index` for protocol sequence numbers
+rather than deriving them from chunk text, which can repeat. Details:
 [Streaming](streaming.md) and
 [Writing templates](configuration/templates.md).
 

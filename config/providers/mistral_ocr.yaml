@@ -1,0 +1,5 @@
+name: "mistral-ocr"
+# POST /v1/ocr (Mistral Document AI). Returns one page per requested page
+# index (`pages`), or a single page when none are given.
+matcher: "^/v1/ocr$"
+response_template: "mistral/ocr.json.j2"

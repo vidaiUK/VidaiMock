@@ -59,6 +59,42 @@ pub struct ProviderConfig {
     /// Priority for matching (higher matches first)
     #[serde(default)]
     pub priority: i32,
+    /// Extra response headers, as `name: template`. Values are Tera templates
+    /// rendered with the request context (plus `status_code`); a header whose
+    /// value renders empty is not sent, so headers can be conditional:
+    /// `retry-after: "{% if status_code == 429 %}2{% endif %}"`.
+    /// Applies to normal, streaming and error responses.
+    #[serde(default)]
+    pub response_headers: std::collections::BTreeMap<String, String>,
+    /// HTTP methods this provider answers. Default: `["POST"]`.
+    #[serde(default)]
+    pub methods: Option<Vec<String>>,
+    /// `base64`: the rendered body is base64 and is decoded before sending,
+    /// for binary responses such as audio. Default: sent as rendered.
+    #[serde(default)]
+    pub body_encoding: Option<String>,
+    /// Scripted responses picked per request. See `scenarios` in the docs.
+    #[serde(default)]
+    pub scenarios: Option<ScenarioConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScenarioConfig {
+    /// Folder under `<config-dir>/scenarios/` holding this provider's scenarios.
+    pub dir: String,
+    /// Template giving the scenario id, e.g. from the model name. Empty means
+    /// "no scenario" (normal response). `X-Vidai-Scenario` always wins.
+    pub key: Option<String>,
+}
+
+impl ProviderConfig {
+    /// Whether this provider answers `method` (case-insensitive).
+    pub fn accepts_method(&self, method: &str) -> bool {
+        match &self.methods {
+            Some(list) => list.iter().any(|m| m.eq_ignore_ascii_case(method)),
+            None => method.eq_ignore_ascii_case("POST"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +106,12 @@ pub struct ProviderStreamConfig {
     pub format: Option<String>,
     /// Encoding for the stream (e.g. "aws-event-stream"). Default is SSE.
     pub encoding: Option<String>,
+    /// With `encoding: aws-event-stream`: "bytes" (default) sends every event
+    /// as `chunk` + `{"bytes": base64}` (InvokeModelWithResponseStream); "json"
+    /// sends typed events named by the template's `event:` line with plain
+    /// JSON payloads (ConverseStream).
+    #[serde(default)]
+    pub aws_payload: Option<String>,
     /// Controls SSE frame wrapping. Default "sse" auto-prefixes each chunk with "data: ".
     /// Set to "raw" to emit template output verbatim — the template controls all framing
     /// including event: and data: lines. Required for providers with typed SSE events.
@@ -286,8 +328,32 @@ impl ProviderRegistry {
             }
         }
 
-        // b. Add all collected templates to Tera
-        for (name, content) in template_map {
+        // 3. Scenario scripts: <config-dir>/scenarios/** (and embedded scenarios/**),
+        //    registered as "scenarios/<dir>/<file>".
+        if !isolated {
+            for file in Asset::iter() {
+                if file.starts_with("scenarios/") {
+                    if let Some(content) = Asset::get(&file) {
+                        template_map.insert(file.to_string(), std::str::from_utf8(content.data.as_ref())?.to_string());
+                    }
+                }
+            }
+        }
+        let scenarios_root = config_dir.join("scenarios");
+        if let Ok(entries) = glob(scenarios_root.join("**/*").to_str().ok_or("Invalid scenario path")?) {
+            for path in entries.flatten().filter(|p| p.is_file()) {
+                let rel = path.strip_prefix(&scenarios_root)?.to_str().ok_or("Invalid path")?.replace('\\', "/");
+                template_map.insert(format!("scenarios/{rel}"), fs::read_to_string(&path)?);
+            }
+        }
+
+        // b. Add all collected templates to Tera. Macro files go first: Tera
+        //    re-checks imports on every add, so a template that imports a
+        //    macro file not yet added would fail (and the error would be
+        //    reported against unrelated templates too).
+        let mut templates: Vec<(String, String)> = template_map.into_iter().collect();
+        templates.sort_by_key(|(name, content)| (!content.contains("{% macro"), name.clone()));
+        for (name, content) in templates {
             // Register with the relative name (e.g., openai/chat.json.j2)
             if let Err(e) = tera.add_raw_template(&name, &content) {
                  tracing::error!("Failed to parse template '{}': {:?}", name, e);
@@ -315,10 +381,13 @@ impl ProviderRegistry {
                 if let Ok(path) = entry {
                     if path.is_file() {
                         let content = fs::read_to_string(&path)?;
-                        if let Ok(config) = serde_yaml::from_str::<ProviderConfig>(&content) {
-                            tracing::debug!("Discovered disk provider: {} ({})", config.name, path.display());
-                            all_configs.push(config);
-                            loaded_provider_names.insert(format!("providers/{}", path.file_name().unwrap().to_str().unwrap()));
+                        match serde_yaml::from_str::<ProviderConfig>(&content) {
+                            Ok(config) => {
+                                tracing::debug!("Discovered disk provider: {} ({})", config.name, path.display());
+                                all_configs.push(config);
+                                loaded_provider_names.insert(format!("providers/{}", path.file_name().unwrap().to_str().unwrap()));
+                            }
+                            Err(e) => tracing::error!("Skipping provider {}: invalid YAML: {}", path.display(), e),
                         }
                     }
                 }
@@ -331,9 +400,12 @@ impl ProviderRegistry {
                 if file.starts_with("providers/") && file.ends_with(".yaml") && !loaded_provider_names.contains(file.as_ref()) {
                     if let Some(content) = Asset::get(&file) {
                         let config_str = std::str::from_utf8(content.data.as_ref())?;
-                        if let Ok(config) = serde_yaml::from_str::<ProviderConfig>(config_str) {
-                            tracing::debug!("Discovered embedded provider: {}", config.name);
-                            all_configs.push(config);
+                        match serde_yaml::from_str::<ProviderConfig>(config_str) {
+                            Ok(config) => {
+                                tracing::debug!("Discovered embedded provider: {}", config.name);
+                                all_configs.push(config);
+                            }
+                            Err(e) => tracing::error!("Skipping embedded provider {}: invalid YAML: {}", file, e),
                         }
                     }
                 }
@@ -347,6 +419,14 @@ impl ProviderRegistry {
         self.providers.clear();
         self.compiled_matchers.clear();
         for config in all_configs {
+            // Compile inline template strings into the shared engine, so they
+            // get the registered helpers (uuid(), timestamp(), has_tool_result, …)
+            // and are parsed once instead of on every render.
+            for s in config.inline_templates() {
+                if let Err(e) = tera.add_raw_template(&inline_template_name(s), s) {
+                    tracing::warn!("Provider '{}': inline template does not compile: {}", config.name, e);
+                }
+            }
             let regex = Regex::new(&config.matcher)?;
             self.compiled_matchers.push((regex, self.providers.len()));
             self.providers.push(config);
@@ -376,10 +456,17 @@ impl ProviderRegistry {
         Ok(())
     }
 
+    /// First provider matching `path` for a POST request.
     pub fn find_provider(&self, path: &str) -> Option<&ProviderConfig> {
+        self.find_provider_for(path, "POST")
+    }
+
+    /// First provider matching `path` that answers `method`.
+    pub fn find_provider_for(&self, path: &str, method: &str) -> Option<&ProviderConfig> {
         for (regex, idx) in &self.compiled_matchers {
-            if regex.is_match(path) {
-                return Some(&self.providers[*idx]);
+            let provider = &self.providers[*idx];
+            if regex.is_match(path) && provider.accepts_method(method) {
+                return Some(provider);
             }
         }
         None
@@ -394,7 +481,40 @@ impl ProviderRegistry {
 
     /// Renders an ad-hoc string using the registered Tera instance
     pub fn render_str(&self, template: &str, context: &tera::Context) -> tera::Result<String> {
+        let name = inline_template_name(template);
+        if self.tera.templates.contains_key(&name) {
+            return self.tera.render(&name, context);
+        }
+        // Not from a provider config (e.g. added at runtime): parse on the fly.
         tera::Tera::one_off(template, context, false)
+    }
+}
+
+/// Stable registry name for an inline template string.
+fn inline_template_name(template: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    template.hash(&mut h);
+    format!("__inline/{:016x}", h.finish())
+}
+
+impl ProviderConfig {
+    /// Every inline template string in this config.
+    fn inline_templates(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = self.request_mapping.values().map(String::as_str).collect();
+        out.extend(self.response_body.as_deref());
+        out.extend(self.response_headers.values().map(String::as_str));
+        out.extend(self.scenarios.as_ref().and_then(|c| c.key.as_deref()));
+        out.extend(self.status_code.as_deref());
+        if let Some(stream) = &self.stream {
+            out.extend(stream.format.as_deref());
+            if let Some(lc) = &stream.lifecycle {
+                for ev in [&lc.on_start, &lc.on_chunk, &lc.on_stop].into_iter().flatten() {
+                    out.extend(ev.template_body.as_deref());
+                }
+            }
+        }
+        out
     }
 }
 
@@ -585,6 +705,7 @@ response_template: "openai/chat.json.j2"
         let mut ctx = tera::Context::new();
         ctx.insert("model", &"test");
         ctx.insert("json", &serde_json::json!({}));
+        ctx.insert("usage_override", &serde_json::json!({})); // always set by Replacer::build_context
         let render = registry.tera.render("openai/chat.json.j2", &ctx);
         assert!(render.is_ok(),
             "default mode must register embedded templates");

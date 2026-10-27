@@ -4,8 +4,6 @@ name: gemini
 # /v1beta/models/{model}:streamGenerateContent
 # embedContent and countTokens handled by dedicated higher-priority providers
 matcher: "^/v1(beta)?/models/[^:]+:(generate|streamGenerate)Content$"
-request_mapping:
-  model: "gemini-2.5-flash"
 error_template: "gemini/error.json.j2"
 stream:
   enabled: true

@@ -204,11 +204,16 @@ pub async fn status_handler(
 
 pub async fn mock_handler(
     Extension(state): Extension<Arc<AppState>>,
+    method: axum::http::Method,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
     Query(query_params): Query<HashMap<String, String>>,
-    Json(request_json): Json<Value>,
+    body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    // Any method, any body: JSON, multipart (audio uploads, image edits) or
+    // none at all (GET/DELETE on id-addressed resources).
+    let request_json = parse_request_body(&headers, body).await;
+
     // Apply latency simulation (with header override support)
     apply_latency(&state.config, &headers).await;
 
@@ -241,9 +246,9 @@ pub async fn mock_handler(
     }
 
     let path = uri.path();
-    
+
     // 1. Try to find a matching provider in the registry
-    if let Some(provider) = state.registry.find_provider(path) {
+    if let Some(provider) = state.registry.find_provider_for(path, method.as_str()) {
         let mut header_map = HashMap::new();
         for (k, v) in headers.iter() {
             header_map.insert(k.to_string(), v.to_str().unwrap_or_default().to_string());
@@ -256,8 +261,10 @@ pub async fn mock_handler(
             &header_map,
             &query_params,
             &path_segments,
-            &provider.name
+            &request_model(&request_json, path, &provider.name)
         );
+
+        context.insert("method", method.as_str());
 
         // Process request_mapping: Extract variables using Tera (e.g. prompt extraction)
         for (key, expr) in &provider.request_mapping {
@@ -271,6 +278,10 @@ pub async fn mock_handler(
                 }
             };
             context.insert(key, &val);
+        }
+
+        if let Some(id) = crate::scenario::requested_id(provider, &state.registry, &headers, &context) {
+            return crate::scenario::respond(&state, provider, &mut context, &id, false, &headers).await;
         }
 
         // Resolve status first so we know whether to render error_template or response_template.
@@ -318,12 +329,28 @@ pub async fn mock_handler(
              return (StatusCode::NOT_FOUND, "No response template defined").into_response();
         };
 
-        let mut response = Response::new(axum::body::Body::from(rendered));
+        let body = match provider.body_encoding.as_deref() {
+            // Binary responses (audio, video): the template renders base64.
+            Some("base64") => {
+                use base64::prelude::*;
+                let compact: String = rendered.split_whitespace().collect();
+                match BASE64_STANDARD.decode(compact.as_bytes()) {
+                    Ok(bytes) => axum::body::Body::from(bytes),
+                    Err(e) => {
+                        tracing::warn!("Provider '{}': body is not valid base64: {}", provider.name, e);
+                        axum::body::Body::from(rendered)
+                    }
+                }
+            }
+            _ => axum::body::Body::from(rendered),
+        };
+        let mut response = Response::new(body);
         *response.status_mut() = status;
         response.headers_mut().insert(
             axum::http::header::CONTENT_TYPE,
              HeaderValue::from_static("application/json"),
         );
+        apply_response_headers(response.headers_mut(), provider, &state.registry, &context);
         return response.into_response();
     }
 
@@ -415,7 +442,7 @@ pub async fn streaming_handler(
                 &header_map,
                 &query_params,
                 &path_segments,
-                &provider.name
+                &request_model(&request_json, path, &provider.name)
             );
 
             // Process request_mapping
@@ -430,11 +457,15 @@ pub async fn streaming_handler(
                 base_context.insert(key, &val);
             }
 
+            if let Some(id) = crate::scenario::requested_id(&provider, &state.registry, &headers, &base_context) {
+                return crate::scenario::respond(&state, &provider, &mut base_context, &id, true, &headers).await;
+            }
+
             // Simulate chunks (for now, still split by whitespace until we implement better tokenization/generation)
             let full_response = if let Some(template_path) = &provider.response_template {
-                 state.registry.tera.render(template_path, &base_context).unwrap_or_default()
+                 render_path(&state.registry, template_path, &base_context)
             } else if let Some(body) = &provider.response_body {
-                 state.registry.render_str(body, &base_context).unwrap_or_default()
+                 render_inline(&state.registry, body, &base_context)
             } else {
                  String::new()
             };
@@ -457,10 +488,19 @@ pub async fn streaming_handler(
                     vec![content_val]
                 };
             
+            // Total chunk count, visible to every lifecycle template (start, chunk, stop).
+            // on_chunk also gets a zero-based `chunk_index` (issue #11).
+            base_context.insert("chunk_count", &chunks.len());
+            // Exactly what the text chunks concatenate to, so closing events
+            // (e.g. Responses `output_text.done`) can repeat the streamed text.
+            let stream_text: String = chunks.iter().filter_map(|c| c.as_str()).collect();
+            base_context.insert("stream_text", &stream_text);
+
             let lifecycle = stream_config.lifecycle.clone();
             let stream_fmt = stream_config.format.clone();
             let encoding = stream_config.encoding.clone().unwrap_or_default(); // "aws-event-stream" or empty for SSE
             let is_raw_frame = stream_config.frame_format.as_deref() == Some("raw");
+            let aws_mode = crate::aws_event_stream::AwsPayload::from_config(stream_config.aws_payload.as_deref());
             
             let mut trickle_ms = state.config.chaos.trickle_ms;
             let mut disconnect_pct = state.config.chaos.disconnect_pct;
@@ -498,9 +538,9 @@ pub async fn streaming_handler(
                 let chosen_template = provider.error_template.as_deref()
                     .or(provider.response_template.as_deref());
                 let body = if let Some(tpl) = chosen_template {
-                    state.registry.tera.render(tpl, &base_context).unwrap_or_default()
+                    render_path(&state.registry, tpl, &base_context)
                 } else if let Some(b) = &provider.response_body {
-                    state.registry.render_str(b, &base_context).unwrap_or_default()
+                    render_inline(&state.registry, b, &base_context)
                 } else {
                     String::new()
                 };
@@ -510,8 +550,13 @@ pub async fn streaming_handler(
                     axum::http::header::CONTENT_TYPE,
                     HeaderValue::from_static("application/json"),
                 );
+                apply_response_headers(resp.headers_mut(), &provider, &state.registry, &base_context);
                 return resp;
             }
+
+            base_context.insert("status_code", &stream_status.as_u16());
+            let mut extra_headers = axum::http::HeaderMap::new();
+            apply_response_headers(&mut extra_headers, &provider, &state.registry, &base_context);
 
             let stream = stream::unfold((0, chunks, full_response, base_context, lifecycle, state_inner, trickle_ms, disconnect_pct, stream_fmt, encoding.clone(), is_raw_frame),
                 move |(idx, chunks, full_response, mut ctx, lifecycle, state, trickle_ms, disconnect_pct, stream_fmt, encoding, is_raw_frame)| async move {
@@ -531,9 +576,9 @@ pub async fn streaming_handler(
                         if let Some(on_start) = &lc.on_start {
                              // Context setup?
                              if let Some(tmpl) = &on_start.template_body {
-                                 Some(tera::Tera::one_off(tmpl, &ctx, false).unwrap_or_default())
+                                 Some(render_inline(&state.registry, tmpl, &ctx))
                              } else if let Some(path) = &on_start.template_path {
-                                 Some(state.registry.tera.render(path, &ctx).unwrap_or_default())
+                                 Some(render_path(&state.registry, path, &ctx))
                              } else {
                                  None 
                              }
@@ -541,16 +586,18 @@ pub async fn streaming_handler(
                     } else { None }
                 } else if idx <= chunks.len() {
                     // Chunk Event
-                    let chunk = &chunks[idx-1];
+                    let chunk_index = idx - 1;
+                    let chunk = &chunks[chunk_index];
                     ctx.insert("chunk", chunk);
+                    ctx.insert("chunk_index", &chunk_index);
                     
                     if let Some(lc) = &lifecycle {
                         if let Some(on_chunk) = &lc.on_chunk {
                              // Context already has "chunk"
                              if let Some(tmpl) = &on_chunk.template_body {
-                                 Some(tera::Tera::one_off(tmpl, &ctx, false).unwrap_or_default())
+                                 Some(render_inline(&state.registry, tmpl, &ctx))
                              } else if let Some(path) = &on_chunk.template_path {
-                                 Some(state.registry.tera.render(path, &ctx).unwrap_or_default())
+                                 Some(render_path(&state.registry, path, &ctx))
                              } else {
                                  Some(chunk.to_string())
                              }
@@ -559,7 +606,7 @@ pub async fn streaming_handler(
                              if let Some(fmt) = &stream_fmt {
                                  let mut chunk_ctx = ctx.clone();
                                  chunk_ctx.insert("chunk", &chunk);
-                                 Some(tera::Tera::one_off(fmt, &chunk_ctx, false).unwrap_or_else(|_| chunk.to_string()))
+                                 Some(state.registry.render_str(fmt, &chunk_ctx).unwrap_or_else(|_| chunk.to_string()))
                              } else {
                                  Some(chunk.to_string())
                              }
@@ -572,9 +619,9 @@ pub async fn streaming_handler(
                     if let Some(lc) = &lifecycle {
                          if let Some(on_stop) = &lc.on_stop {
                              if let Some(tmpl) = &on_stop.template_body {
-                                  Some(tera::Tera::one_off(tmpl, &ctx, false).unwrap_or_default())
+                                  Some(render_inline(&state.registry, tmpl, &ctx))
                              } else if let Some(path) = &on_stop.template_path {
-                                 Some(state.registry.tera.render(path, &ctx).unwrap_or_default())
+                                 Some(render_path(&state.registry, path, &ctx))
                              } else { None }
                          } else { None }
                     } else { 
@@ -585,10 +632,12 @@ pub async fn streaming_handler(
                 let next_idx = idx + 1;
                 sleep(Duration::from_millis(trickle_ms)).await;
                 
+                // A template that rendered nothing emits no frame (not an empty `data:`).
+                let raw_data = raw_data.filter(|d| !d.trim().is_empty());
                 if let Some(data) = raw_data {
                     // Format output based on encoding
                     if encoding == "aws-event-stream" {
-                        let bytes = crate::aws_event_stream::AwsEventStreamEncoder::encode_chunk(&data);
+                        let bytes = crate::aws_event_stream::AwsEventStreamEncoder::encode_template_output(&data, aws_mode);
                         Some((Ok::<_, Infallible>(axum::body::Bytes::from(bytes)), (next_idx, chunks, full_response, ctx, lifecycle, state, trickle_ms, disconnect_pct, stream_fmt, encoding, is_raw_frame)))
                     } else if is_raw_frame {
                         // Raw frame mode: template controls SSE framing.
@@ -636,7 +685,10 @@ pub async fn streaming_handler(
                         if let Some(name) = event_name {
                              buf.extend_from_slice(format!("event: {}\n", name).as_bytes());
                         }
-                        buf.extend_from_slice(format!("data: {}\n", minified).as_bytes());
+                        // SSE spec: a multi-line payload is one `data:` line per line.
+                        for line in minified.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                            buf.extend_from_slice(format!("data: {}\n", line).as_bytes());
+                        }
                         buf.extend_from_slice(b"\n");
                         Some((Ok::<_, Infallible>(axum::body::Bytes::from(buf)), (next_idx, chunks, full_response, ctx, lifecycle, state, trickle_ms, disconnect_pct, stream_fmt, encoding, is_raw_frame)))
                     }
@@ -659,6 +711,7 @@ pub async fn streaming_handler(
                 response.headers_mut().insert(axum::http::header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
                 response.headers_mut().insert(axum::http::header::CONNECTION, HeaderValue::from_static("keep-alive"));
             }
+            response.headers_mut().extend(extra_headers);
              
             return response;
          }
@@ -666,6 +719,117 @@ pub async fn streaming_handler(
 
     // No provider or stream config found
     (StatusCode::NOT_FOUND, "No streaming configuration found for this provider.").into_response()
+}
+
+/// The model a response should report: the request's `model` field, else the
+/// model in the URL (Gemini/Vertex `.../models/{model}:action`, Bedrock
+/// `/model/{id}/...`), else `fallback` (the provider name).
+fn request_model(request_json: &Value, path: &str, fallback: &str) -> String {
+    if let Some(m) = request_json.get("model").and_then(Value::as_str).filter(|m| !m.is_empty()) {
+        return m.to_string();
+    }
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    for (i, seg) in segments.iter().enumerate() {
+        if (*seg == "models" || *seg == "model") && i + 1 < segments.len() {
+            let id = segments[i + 1].split(':').next().unwrap_or_default();
+            if !id.is_empty() {
+                return id.to_string();
+            }
+        }
+    }
+    fallback.to_string()
+}
+
+/// Parse a request body into the template's `json` value.
+///
+/// - JSON -> as is
+/// - multipart/form-data -> an object of its fields; file parts become
+///   `{"filename", "content_type", "size"}`
+/// - empty or anything else -> `{}`
+async fn parse_request_body(headers: &HeaderMap, body: axum::body::Bytes) -> Value {
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    if let Ok(boundary) = multer::parse_boundary(content_type) {
+        let stream = futures::stream::once(async move { Ok::<_, std::io::Error>(body) });
+        let mut form = multer::Multipart::new(stream, boundary);
+        let mut fields = serde_json::Map::new();
+        while let Ok(Some(field)) = form.next_field().await {
+            let name = field.name().unwrap_or_default().to_string();
+            let file = field.file_name().map(str::to_string);
+            let part_type = field.content_type().map(|m| m.to_string());
+            let data = field.bytes().await.unwrap_or_default();
+            let value = match file {
+                Some(filename) => serde_json::json!({
+                    "filename": filename, "content_type": part_type, "size": data.len()
+                }),
+                None => Value::String(String::from_utf8_lossy(&data).into_owned()),
+            };
+            fields.insert(name, value);
+        }
+        return Value::Object(fields);
+    }
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Value::Object(Default::default());
+    }
+    serde_json::from_slice(&body).unwrap_or_else(|e| {
+        tracing::debug!("Request body is not JSON ({}); templates see an empty `json`", e);
+        Value::Object(Default::default())
+    })
+}
+
+/// Add the provider's `response_headers`, rendered against `ctx`.
+/// Empty values are skipped; invalid names or values are logged and skipped.
+pub(crate) fn apply_response_headers(
+    target: &mut axum::http::HeaderMap,
+    provider: &crate::provider::ProviderConfig,
+    registry: &crate::provider::ProviderRegistry,
+    ctx: &tera::Context,
+) {
+    for (name, tmpl) in &provider.response_headers {
+        let value = render_inline(registry, tmpl, ctx);
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        match (
+            axum::http::HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            (Ok(n), Ok(v)) => { target.insert(n, v); }
+            _ => tracing::warn!("Provider '{}': invalid response header {}: {:?}", provider.name, name, value),
+        }
+    }
+}
+
+/// Render a registered template; a failure is logged and renders as empty.
+pub(crate) fn render_path(registry: &crate::provider::ProviderRegistry, path: &str, ctx: &tera::Context) -> String {
+    registry.tera.render(path, ctx).unwrap_or_else(|e| {
+        tracing::warn!("Template '{}' failed to render: {}", path, render_error_chain(&e));
+        String::new()
+    })
+}
+
+/// Render an inline template string; a failure is logged and renders as empty.
+pub(crate) fn render_inline(registry: &crate::provider::ProviderRegistry, tmpl: &str, ctx: &tera::Context) -> String {
+    registry.render_str(tmpl, ctx).unwrap_or_else(|e| {
+        let preview: String = tmpl.chars().take(60).collect();
+        tracing::warn!("Inline template '{}…' failed to render: {}", preview, render_error_chain(&e));
+        String::new()
+    })
+}
+
+/// Tera hides the useful cause (e.g. "Variable `x` not found") in the source chain.
+fn render_error_chain(e: &tera::Error) -> String {
+    let mut msg = e.to_string();
+    let mut src = std::error::Error::source(e);
+    while let Some(cause) = src {
+        msg.push_str(": ");
+        msg.push_str(&cause.to_string());
+        src = cause.source();
+    }
+    msg
 }
 
 fn minify_json(s: String) -> String {
@@ -685,6 +849,10 @@ fn extract_content_value(json_str: &str) -> (serde_json::Value, bool) {
         // OpenAI format: choices[0].message.content or tool_calls
         if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
             if let Some(first_choice) = choices.get(0) {
+                // Legacy /v1/completions: choices[0].text
+                if let Some(text) = first_choice.get("text").filter(|t| t.is_string()) {
+                    return (text.clone(), false);
+                }
                 if let Some(message) = first_choice.get("message") {
                     // Check for tool_calls first
                      if let Some(tool_calls) = message.get("tool_calls") {

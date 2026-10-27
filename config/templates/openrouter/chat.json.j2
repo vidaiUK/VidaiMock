@@ -15,7 +15,7 @@
    across every OpenAI-compatible provider (VM-013).
 #}
 {% set has_tools = json.tools is defined and json.tools | length > 0 %}
-{% if has_tools and has_tool_result(messages=json.messages, provider="openai") %}
+{% if has_tools and has_tool_result(messages=json.messages | default(value=[]), provider="openai") %}
 {
     "id": "gen-{{ uuid() }}",
     "provider": "MockProvider",

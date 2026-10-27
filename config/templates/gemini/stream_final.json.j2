@@ -1,3 +1,4 @@
+{% import "usage/macros.j2" as u -%}
 {#- Gemini streaming final chunk.
 
     Per real Gemini `streamGenerateContent?alt=sse`, the terminal chunk:
@@ -23,15 +24,7 @@
       ]
     }
   ],
-  "modelVersion": "gemini-2.5-flash",
+  "modelVersion": "{{ model }}",
   "responseId": "mock-{{ uuid }}",
-  "usageMetadata": {
-    "candidatesTokenCount": 8,
-    "promptTokenCount": 10,
-    "promptTokensDetails": [
-      {"modality": "TEXT", "tokenCount": 10}
-    ],
-    "thoughtsTokenCount": 22,
-    "totalTokenCount": 40
-  }
+  "usageMetadata": {{ u::gemini(o=usage_override, input=10, output=8, reasoning=22) }}
 }

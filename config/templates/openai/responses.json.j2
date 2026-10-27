@@ -1,3 +1,4 @@
+{% import "usage/macros.j2" as u -%}
 {#
    OpenAI Responses API (/v1/responses) response template.
 
@@ -85,7 +86,7 @@
 {#- After a tool result the reply is a synthesis of that result, not a generic
     greeting. Mirrors the wording chat.json.j2 uses for the same case so both
     OpenAI surfaces read consistently. -#}
-          "text": "{% if has_tool_result %}Based on the tool results, here is the answer.{% else %}This is a mock response from VidaiMock Responses API.{% endif %}",
+          "text": "{% if has_tool_result %}Based on the tool results, here is the answer.{% elif generated_text %}{{ generated_text }}{% else %}This is a mock response from VidaiMock Responses API.{% endif %}",
           "annotations": []
         }
       ]
@@ -103,17 +104,7 @@
   "tools": [],
   "top_p": 1.0,
   "truncation": "disabled",
-  "usage": {
-    "input_tokens": 18,
-    "input_tokens_details": {
-      "cached_tokens": 0
-    },
-    "output_tokens": {% if is_reasoning %}153{% else %}25{% endif %},
-    "output_tokens_details": {
-      "reasoning_tokens": {% if is_reasoning %}128{% else %}0{% endif %}
-    },
-    "total_tokens": {% if is_reasoning %}171{% else %}43{% endif %}
-  },
+  "usage": {% if is_reasoning %}{{ u::responses(o=usage_override, input=18, output=153, reasoning=128) }}{% else %}{{ u::responses(o=usage_override, input=18, output=25) }}{% endif %},
   "user": null,
   "metadata": {}
 }

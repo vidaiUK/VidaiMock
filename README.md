@@ -56,18 +56,24 @@ No configuration needed. These providers work immediately:
 | Provider | Endpoint | Streaming |
 |----------|----------|-----------|
 | **OpenAI Chat** | `/v1/chat/completions` | ✅ |
-| **OpenAI Responses** | `/v1/responses` | ✅ (typed SSE events) |
+| **OpenAI Responses** | `/v1/responses` (+ `GET`/`DELETE /v1/responses/{id}`, `/input_items`) | ✅ (typed SSE events) |
+| **OpenAI Legacy Completions** | `/v1/completions` | ✅ |
 | **OpenAI Embeddings** | `/v1/embeddings` | — |
-| **OpenAI Images** | `/v1/images/generations` | — |
+| **OpenAI Images** | `/v1/images/generations`, `/edits`, `/variations` | — |
+| **OpenAI Audio** | `/v1/audio/speech`, `/transcriptions`, `/translations` | — |
+| **OpenAI Videos** | `/v1/videos` (create, list, get, delete, `/content`) | — |
 | **OpenAI Moderations** | `/v1/moderations` | — |
 | **Anthropic** | `/v1/messages` | ✅ (all 7 SSE event types) |
+| **Anthropic Token Count** | `/v1/messages/count_tokens` | — |
 | **Gemini Generate** | `/v1beta/models/*:generateContent` | ✅ (text deltas + terminal `finishReason: STOP` chunk with `usageMetadata`, no `[DONE]`) |
 | **Gemini Embeddings** | `/v1beta/models/*:embedContent` | — |
 | **Gemini Token Count** | `/v1beta/models/*:countTokens` | — |
 | **Gemini Models** | `GET /v1beta/models` | — |
 | **Gemini OpenAI Shim** | `/v1beta/openai/*` | ✅ |
 | **Azure OpenAI** | `/openai/deployments/*` | ✅ |
-| **Bedrock** | `/model/*/invoke` | ✅ |
+| **Vertex AI** | `/v1/projects/*/locations/*/publishers/google/models/*` | ✅ (Gemini wire shape) |
+| **Bedrock** | `/model/*/invoke`, `/converse` | ✅ (binary AWS event stream: `invoke-with-response-stream`, `converse-stream`) |
+| **Mistral OCR** | `/v1/ocr` | — |
 | **Cohere, Mistral, Groq** | OpenAI-compatible | ✅ |
 | **Error Simulator** | `/error/{code}` | — |
 
@@ -220,7 +226,7 @@ no teardown.
 
 ```toml
 [dev-dependencies]
-vidaimock = "0.3"
+vidaimock = "0.4"
 ```
 
 ```rust

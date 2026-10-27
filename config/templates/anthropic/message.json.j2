@@ -1,3 +1,4 @@
+{% import "usage/macros.j2" as u -%}
 {#
    Anthropic /v1/messages response template.
 
@@ -10,7 +11,7 @@
 
    Includes 2025+ fields: cache_creation, service_tier, inference_geo, stop_details.
 #}
-{%- set has_result = has_tool_result(messages=json.messages, provider="anthropic") -%}
+{%- set has_result = has_tool_result(messages=json.messages | default(value=[]), provider="anthropic") -%}
 {%- set emit_tool_use = json.tools and not has_result -%}
 {
   "id": "msg_{{ uuid }}",
@@ -36,7 +37,7 @@
     {% else %}
     {
       "type": "text",
-      "text": "Anthropic mock response. {{ iso_timestamp() }}"
+      "text": "{% if generated_text %}{{ generated_text }}{% else %}Anthropic mock response. {{ iso_timestamp() }}{% endif %}"
     }
     {% endif %}
   ],
@@ -47,16 +48,5 @@
   {% endif %}
   "stop_sequence": null,
   "stop_details": null,
-  "usage": {
-    "input_tokens": 16,
-    "cache_creation_input_tokens": 0,
-    "cache_read_input_tokens": 0,
-    "cache_creation": {
-      "ephemeral_5m_input_tokens": 0,
-      "ephemeral_1h_input_tokens": 0
-    },
-    "output_tokens": 10,
-    "service_tier": "standard",
-    "inference_geo": "not_available"
-  }
+  "usage": {{ u::anthropic(o=usage_override, input=16, output=10) }}
 }

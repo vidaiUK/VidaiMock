@@ -2,6 +2,12 @@ name: "anthropic"
 matcher: "^/v1/messages(/stream)?$"
 response_template: "anthropic/message.json.j2"
 error_template: "anthropic/error.json.j2"
+# Headers real Anthropic sends; gateways should pass them through.
+response_headers:
+  request-id: "req_{{ uuid | replace(from='-', to='') }}"
+  anthropic-ratelimit-requests-limit: "4000"
+  anthropic-ratelimit-requests-remaining: "{% if status_code == 429 %}0{% else %}3999{% endif %}"
+  retry-after: "{% if status_code == 429 or status_code == 529 or status_code == 503 %}2{% endif %}"
 # VM-007: reject requests missing required fields with 400, matching real
 # Anthropic validation. Order of checks mirrors the error template's reason
 # detection so status and body stay consistent.

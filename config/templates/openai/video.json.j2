@@ -1,0 +1,11 @@
+{#- OpenAI video job objects (Sora): create -> queued, retrieve/list -> completed. -#}
+{%- set vid = path_segments.2 | default(value="video_" ~ uuid | replace(from="-", to="")) -%}
+{%- set queued = method == "POST" -%}
+{%- set is_list = method == "GET" and path_segments | length == 2 -%}
+{%- if method == "DELETE" -%}
+{"id": "{{ vid }}", "object": "video.deleted", "deleted": true}
+{%- else -%}
+{% if is_list %}{"object": "list", "data": [{% endif -%}
+{"id": "{{ vid }}", "object": "video", "model": "{{ json.model | default(value="sora-2") }}", "status": "{% if queued %}queued{% else %}completed{% endif %}", "progress": {% if queued %}0{% else %}100{% endif %}, "created_at": {{ timestamp }}, "completed_at": {% if queued %}null{% else %}{{ timestamp }}{% endif %}, "expires_at": null, "size": "{{ json.size | default(value="720x1280") }}", "seconds": "{{ json.seconds | default(value="4") }}", "quality": "standard", "remixed_from_video_id": null, "error": null}
+{%- if is_list %}], "first_id": "{{ vid }}", "last_id": "{{ vid }}", "has_more": false}{% endif -%}
+{%- endif -%}

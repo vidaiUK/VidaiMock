@@ -1,7 +1,7 @@
 name: cohere
 matcher: "^/v1/chat$"
 request_mapping:
-  model: "command-r"
+  model: "{{ json.model | default(value='command-r') }}"
 stream:
   enabled: true
   lifecycle:

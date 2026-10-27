@@ -1,18 +1,23 @@
 {#
-   OpenAI image generation response template.
+   OpenAI image generation / edit / variation response.
 
-   Shape matches real /v1/images/generations responses:
-     - top-level: {created, data: [{url} | {b64_json}]}
-     - NO usage block (image-gen is priced per-image, not per-token)
-     - NO model field in response (model is in the request only)
-     - data[].revised_prompt present for dall-e-3+ (not for dall-e-2)
+   - `n` images (multipart sends it as a string, so it is converted).
+   - gpt-image-* always returns b64_json and a token `usage` block;
+     dall-e-* returns `url` unless response_format is b64_json, and no usage.
+   - revised_prompt only for dall-e-3.
 #}
+{%- set model = json.model | default(value="dall-e-2") -%}
+{%- set n = json.n | default(value=1) | int -%}
+{%- set is_gpt_image = model is starting_with("gpt-image") -%}
+{%- set b64 = is_gpt_image or json.response_format | default(value="url") == "b64_json" -%}
 {
-  "created": {{ timestamp() }},
+  "created": {{ timestamp }},
   "data": [
-    {
-      "url": "https://mock.vidaimock.local/images/{{ uuid() }}.png",
-      "revised_prompt": "A mock image for: {{ json.prompt | default(value='no prompt') }}"
-    }
+    {%- for i in range(end=n) %}
+    { {% if b64 %}"b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="{% else %}"url": "https://mock.vidaimock.local/images/{{ uuid() }}.png"{% endif %}{% if model == "dall-e-3" %}, "revised_prompt": {{ json.prompt | default(value="no prompt") | json_encode() }}{% endif %} }{% if not loop.last %},{% endif %}
+    {%- endfor %}
   ]
+  {%- if is_gpt_image %},
+  "usage": {"total_tokens": {{ 50 + 4160 * n }}, "input_tokens": 50, "output_tokens": {{ 4160 * n }}, "input_tokens_details": {"text_tokens": 40, "image_tokens": 10}}
+  {%- endif %}
 }
