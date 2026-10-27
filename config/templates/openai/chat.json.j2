@@ -1,3 +1,4 @@
+{% import "usage/macros.j2" as u -%}
 {#
    OpenAI chat completion response template.
 
@@ -29,13 +30,7 @@
       "finish_reason": "stop"
     }
   ],
-  "usage": {
-    "prompt_tokens": 72,
-    "completion_tokens": 14,
-    "total_tokens": 86,
-    "prompt_tokens_details": { "cached_tokens": 0, "audio_tokens": 0 },
-    "completion_tokens_details": { "reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0 }
-  },
+  "usage": {{ u::openai(o=usage_override, input=72, output=14, reasoning=0) }},
   "service_tier": "default",
   "system_fingerprint": "fp_mock_vidai"
 }
@@ -68,13 +63,7 @@
       "finish_reason": "tool_calls"
     }
   ],
-  "usage": {
-    "prompt_tokens": 51,
-    "completion_tokens": 14,
-    "total_tokens": 65,
-    "prompt_tokens_details": { "cached_tokens": 0, "audio_tokens": 0 },
-    "completion_tokens_details": { "reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0 }
-  },
+  "usage": {{ u::openai(o=usage_override, input=51, output=14, reasoning=0) }},
   "service_tier": "default",
   "system_fingerprint": "fp_mock_vidai"
 }
@@ -97,13 +86,7 @@
       "finish_reason": "stop"
     }
   ],
-  "usage": {
-    "prompt_tokens": 41,
-    "completion_tokens": 5,
-    "total_tokens": 46,
-    "prompt_tokens_details": { "cached_tokens": 0, "audio_tokens": 0 },
-    "completion_tokens_details": { "reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0 }
-  },
+  "usage": {{ u::openai(o=usage_override, input=41, output=5, reasoning=0) }},
   "service_tier": "default",
   "system_fingerprint": "fp_mock_vidai"
 }
@@ -125,13 +108,7 @@
       "finish_reason": "stop"
     }
   ],
-  "usage": {
-    "prompt_tokens": 18,
-    "completion_tokens": 83,
-    "total_tokens": 101,
-    "prompt_tokens_details": { "cached_tokens": 0, "audio_tokens": 0 },
-    "completion_tokens_details": { "reasoning_tokens": 64, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0 }
-  },
+  "usage": {{ u::openai(o=usage_override, input=18, output=83, reasoning=64) }},
   "service_tier": "default",
   "system_fingerprint": null
 }
@@ -146,7 +123,7 @@
       "index": 0,
       "message": {
         "role": "assistant",
-        "content": "This is a mock response from VidaiMock. Model: {{ model }}",
+        "content": "{% if generated_text %}{{ generated_text }}{% else %}This is a mock response from VidaiMock. Model: {{ model }}{% endif %}",
         "refusal": null,
         "annotations": []
       },
@@ -154,13 +131,7 @@
       "finish_reason": "stop"
     }
   ],
-  "usage": {
-    "prompt_tokens": 10,
-    "completion_tokens": 10,
-    "total_tokens": 20,
-    "prompt_tokens_details": { "cached_tokens": 0, "audio_tokens": 0 },
-    "completion_tokens_details": { "reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0 }
-  },
+  "usage": {{ u::openai(o=usage_override, input=10, output=10, reasoning=0) }},
   "service_tier": "default",
   "system_fingerprint": "fp_mock_vidai"
 }

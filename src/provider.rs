@@ -347,8 +347,13 @@ impl ProviderRegistry {
             }
         }
 
-        // b. Add all collected templates to Tera
-        for (name, content) in template_map {
+        // b. Add all collected templates to Tera. Macro files go first: Tera
+        //    re-checks imports on every add, so a template that imports a
+        //    macro file not yet added would fail (and the error would be
+        //    reported against unrelated templates too).
+        let mut templates: Vec<(String, String)> = template_map.into_iter().collect();
+        templates.sort_by_key(|(name, content)| (!content.contains("{% macro"), name.clone()));
+        for (name, content) in templates {
             // Register with the relative name (e.g., openai/chat.json.j2)
             if let Err(e) = tera.add_raw_template(&name, &content) {
                  tracing::error!("Failed to parse template '{}': {:?}", name, e);
@@ -700,6 +705,7 @@ response_template: "openai/chat.json.j2"
         let mut ctx = tera::Context::new();
         ctx.insert("model", &"test");
         ctx.insert("json", &serde_json::json!({}));
+        ctx.insert("usage_override", &serde_json::json!({})); // always set by Replacer::build_context
         let render = registry.tera.render("openai/chat.json.j2", &ctx);
         assert!(render.is_ok(),
             "default mode must register embedded templates");

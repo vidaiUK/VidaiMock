@@ -1,0 +1,56 @@
+{#- Provider-native usage blocks.
+
+    `o` is the X-Vidai-Usage override (an object, possibly empty) with keys:
+      input        prompt/input tokens
+      output       completion/output tokens
+      cached       tokens read from the prompt cache
+      cache_write  tokens written to the prompt cache (Anthropic)
+      reasoning    reasoning / thinking tokens
+    Missing keys fall back to the caller's defaults, so templates are
+    unchanged when no header is sent.
+
+    Provider rules this encodes:
+      - OpenAI / Responses: cached tokens are part of the input count;
+        reasoning tokens are part of the output count.
+      - Anthropic: input_tokens excludes cache reads and writes, which are
+        reported separately; thinking is part of output_tokens.
+      - Gemini: promptTokenCount includes cached tokens; thoughtsTokenCount is
+        separate and added to totalTokenCount.
+-#}
+
+{% macro openai(o, input, output, cached=0, reasoning=0) -%}
+{%- set c = o.cached | default(value=cached) -%}
+{%- set i = o.input | default(value=input) -%}{%- if c > i %}{% set i = c %}{% endif -%}
+{%- set r = o.reasoning | default(value=reasoning) -%}
+{%- set out = o.output | default(value=output) -%}{%- if r > out %}{% set out = r %}{% endif -%}
+{"prompt_tokens": {{ i }}, "completion_tokens": {{ out }}, "total_tokens": {{ i + out }}, "prompt_tokens_details": {"cached_tokens": {{ c }}, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": {{ r }}, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}}
+{%- endmacro openai %}
+
+{% macro responses(o, input, output, cached=0, reasoning=0) -%}
+{%- set c = o.cached | default(value=cached) -%}
+{%- set i = o.input | default(value=input) -%}{%- if c > i %}{% set i = c %}{% endif -%}
+{%- set r = o.reasoning | default(value=reasoning) -%}
+{%- set out = o.output | default(value=output) -%}{%- if r > out %}{% set out = r %}{% endif -%}
+{"input_tokens": {{ i }}, "input_tokens_details": {"cached_tokens": {{ c }}}, "output_tokens": {{ out }}, "output_tokens_details": {"reasoning_tokens": {{ r }}}, "total_tokens": {{ i + out }}}
+{%- endmacro responses %}
+
+{% macro anthropic(o, input, output, cached=0, cache_write=0) -%}
+{%- set w = o.cache_write | default(value=cache_write) -%}
+{"input_tokens": {{ o.input | default(value=input) }}, "cache_creation_input_tokens": {{ w }}, "cache_read_input_tokens": {{ o.cached | default(value=cached) }}, "cache_creation": {"ephemeral_5m_input_tokens": {{ w }}, "ephemeral_1h_input_tokens": 0}, "output_tokens": {{ o.output | default(value=output) }}, "service_tier": "standard", "inference_geo": "not_available"}
+{%- endmacro anthropic %}
+
+{#- Anthropic message_delta usage: cumulative counts at the end of a stream. -#}
+{% macro anthropic_delta(o, input, output, cached=0, cache_write=0) -%}
+{"input_tokens": {{ o.input | default(value=input) }}, "cache_creation_input_tokens": {{ o.cache_write | default(value=cache_write) }}, "cache_read_input_tokens": {{ o.cached | default(value=cached) }}, "output_tokens": {{ o.output | default(value=output) }}}
+{%- endmacro anthropic_delta %}
+
+{% macro gemini(o, input, output, reasoning=0, cached=0) -%}
+{%- set c = o.cached | default(value=cached) -%}
+{%- set i = o.input | default(value=input) -%}{%- if c > i %}{% set i = c %}{% endif -%}
+{%- set r = o.reasoning | default(value=reasoning) -%}
+{%- set out = o.output | default(value=output) -%}
+{"promptTokenCount": {{ i }}, "candidatesTokenCount": {{ out }}, "totalTokenCount": {{ i + out + r }}, "promptTokensDetails": [{"modality": "TEXT", "tokenCount": {{ i }}}]
+{%- if c > 0 %}, "cachedContentTokenCount": {{ c }}, "cacheTokensDetails": [{"modality": "TEXT", "tokenCount": {{ c }}}]{% endif -%}
+{%- if r > 0 %}, "thoughtsTokenCount": {{ r }}{% endif -%}
+}
+{%- endmacro gemini %}

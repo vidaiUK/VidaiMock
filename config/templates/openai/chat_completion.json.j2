@@ -1,3 +1,4 @@
+{% import "usage/macros.j2" as u -%}
 {#
    Generic OpenAI-compatible chat.completion response.
 
@@ -32,11 +33,7 @@
       "finish_reason": "stop"
     }
   ],
-  "usage": {
-    "prompt_tokens": 72,
-    "completion_tokens": 14,
-    "total_tokens": 86
-  }
+  "usage": {{ u::openai(o=usage_override, input=72, output=14) }}
 }
 {% elif has_tools %}
 {
@@ -64,11 +61,7 @@
       "finish_reason": "tool_calls"
     }
   ],
-  "usage": {
-    "prompt_tokens": 51,
-    "completion_tokens": 14,
-    "total_tokens": 65
-  }
+  "usage": {{ u::openai(o=usage_override, input=51, output=14) }}
 }
 {% else %}
 {
@@ -81,15 +74,11 @@
       "index": 0,
       "message": {
         "role": "assistant",
-        {% set last_msg = json.messages | default(value=[]) | last %}"content": "{{ last_msg.content | default(value='Hello!') }}"
+        {% set last_msg = json.messages | default(value=[]) | last %}"content": {% if generated_text %}"{{ generated_text }}"{% elif last_msg.content is string %}{{ last_msg.content | json_encode() }}{% else %}"Hello!"{% endif %}
       },
       "finish_reason": "stop"
     }
   ],
-  "usage": {
-    "prompt_tokens": 10,
-    "completion_tokens": 10,
-    "total_tokens": 20
-  }
+  "usage": {{ u::openai(o=usage_override, input=10, output=10) }}
 }
 {% endif %}

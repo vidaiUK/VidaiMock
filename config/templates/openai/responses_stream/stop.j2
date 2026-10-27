@@ -1,3 +1,4 @@
+{% import "usage/macros.j2" as u -%}
 {#- Responses API stream: closing events (VM-012 / issue #8).
 
     Two closing sequences, matching the shape start.j2 opened:
@@ -41,7 +42,7 @@ event: response.output_item.done
 data: {"type":"response.output_item.done","sequence_number":{{ seq0 + 1 }},"output_index":0,"item":{"id":"fc_{{ uuid }}","type":"function_call","call_id":"call_{{ uuid }}","name":"{{ tool_name }}","arguments":"{\"city\":\"Paris\"}","status":"completed"}}
 
 event: response.completed
-data: {"type":"response.completed","sequence_number":{{ seq0 + 2 }},"response":{"id":"resp_{{ uuid }}","object":"response","created_at":{{ timestamp() }},"status":"completed","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[{"id":"fc_{{ uuid }}","type":"function_call","call_id":"call_{{ uuid }}","name":"{{ tool_name }}","arguments":"{\"city\":\"Paris\"}","status":"completed"}],"usage":{"input_tokens":18,"output_tokens":25,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":43}}}
+data: {"type":"response.completed","sequence_number":{{ seq0 + 2 }},"response":{"id":"resp_{{ uuid }}","object":"response","created_at":{{ timestamp() }},"status":"completed","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[{"id":"fc_{{ uuid }}","type":"function_call","call_id":"call_{{ uuid }}","name":"{{ tool_name }}","arguments":"{\"city\":\"Paris\"}","status":"completed"}],"usage":{{ u::responses(o=usage_override, input=18, output=25) }}}}
 {%- else -%}
 event: response.output_text.done
 data: {"type":"response.output_text.done","sequence_number":{{ seq0 }},"output_index":0,"content_index":0,"text":{{ stream_text | json_encode() }}}
@@ -53,5 +54,5 @@ event: response.output_item.done
 data: {"type":"response.output_item.done","sequence_number":{{ seq0 + 2 }},"output_index":0,"item":{"id":"msg_{{ uuid }}","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":{{ stream_text | json_encode() }},"annotations":[]}]}}
 
 event: response.completed
-data: {"type":"response.completed","sequence_number":{{ seq0 + 3 }},"response":{"id":"resp_{{ uuid }}","object":"response","created_at":{{ timestamp() }},"status":"completed","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[{"id":"msg_{{ uuid }}","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":{{ stream_text | json_encode() }},"annotations":[]}]}],"usage":{"input_tokens":18,"output_tokens":25,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":43}}}
+data: {"type":"response.completed","sequence_number":{{ seq0 + 3 }},"response":{"id":"resp_{{ uuid }}","object":"response","created_at":{{ timestamp() }},"status":"completed","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[{"id":"msg_{{ uuid }}","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":{{ stream_text | json_encode() }},"annotations":[]}]}],"usage":{{ u::responses(o=usage_override, input=18, output=25) }}}}
 {%- endif %}

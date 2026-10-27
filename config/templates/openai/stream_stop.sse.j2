@@ -1,3 +1,4 @@
+{% import "usage/macros.j2" as u -%}
 {#- OpenAI streaming terminal sequence.
     Emitted after the last content chunk. Frames, in order:
       1. Empty-delta chunk carrying finish_reason: "stop"
@@ -11,7 +12,7 @@
 data: {"id":"chatcmpl-{{ uuid }}","object":"chat.completion.chunk","created":1699000000,"model":"{{ json.model | default(value=model) }}","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
 
 {% if json.stream_options is defined and json.stream_options.include_usage is defined and json.stream_options.include_usage -%}
-data: {"id":"chatcmpl-{{ uuid }}","object":"chat.completion.chunk","created":1699000000,"model":"{{ json.model | default(value=model) }}","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20}}
+data: {"id":"chatcmpl-{{ uuid }}","object":"chat.completion.chunk","created":1699000000,"model":"{{ json.model | default(value=model) }}","choices":[],"usage":{{ u::openai(o=usage_override, input=10, output=10) }}}
 
 {% endif -%}
 data: [DONE]

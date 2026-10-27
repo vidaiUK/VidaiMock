@@ -1,10 +1,11 @@
+{% import "usage/macros.j2" as u -%}
 {
   "candidates": [
     {
       "content": {
         "parts": [
           {
-            "text": "This is a Vertex AI mock response. Request received at {{ iso_timestamp() }}."
+            "text": "{% if generated_text %}{{ generated_text }}{% else %}This is a Vertex AI mock response. Request received at {{ iso_timestamp() }}.{% endif %}"
           }
         ],
         "role": "model"
@@ -31,9 +32,5 @@
       ]
     }
   ],
-  "usageMetadata": {
-    "promptTokenCount": {{ random_int(min=5, max=20) }},
-    "candidatesTokenCount": {{ random_int(min=10, max=50) }},
-    "totalTokenCount": {{ random_int(min=15, max=70) }}
-  }
+  "usageMetadata": {{ u::gemini(o=usage_override, input=10, output=8, reasoning=22) }}
 }

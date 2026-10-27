@@ -149,7 +149,9 @@ pub async fn create_app(config: AppConfig, metrics_handle: Option<PrometheusHand
     }
 
     // Every method reaches the provider matcher; providers declare `methods`.
+    let body_limit = usize::try_from(config.max_body_mb.saturating_mul(1024 * 1024)).unwrap_or(usize::MAX);
     app.fallback(any(mock_handler))
+       .layer(axum::extract::DefaultBodyLimit::max(body_limit))
        .layer(Extension(state))
        .layer(TraceLayer::new_for_http())
        .layer(middleware::from_fn(track_metrics))
@@ -224,6 +226,7 @@ mod tests {
                 content_type: None,
             }],
             response_file: None,
+            max_body_mb: 32,
             chaos: crate::config::ChaosConfig {
                 enabled: false,
                 drop_pct: 0.0,
