@@ -5,6 +5,14 @@ response_template: "openai/chat.json.j2"
 # Rendered instead of response_template when a chaos override (chaos_status
 # query, X-Mock-Status header, X-Vidai-Chaos-Drop) triggers an error status.
 error_template: "openai/error.json.j2"
+# Headers real OpenAI sends; gateways should pass them through.
+response_headers:
+  x-request-id: "req_{{ uuid | replace(from='-', to='') }}"
+  openai-processing-ms: "{{ random_int(min=120, max=900) }}"
+  x-ratelimit-limit-requests: "10000"
+  x-ratelimit-remaining-requests: "{% if status_code == 429 %}0{% else %}9999{% endif %}"
+  x-ratelimit-reset-requests: "6ms"
+  retry-after: "{% if status_code == 429 or status_code == 503 %}2{% endif %}"
 stream:
   enabled: true
   frame_format: raw

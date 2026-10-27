@@ -324,6 +324,7 @@ pub async fn mock_handler(
             axum::http::header::CONTENT_TYPE,
              HeaderValue::from_static("application/json"),
         );
+        apply_response_headers(response.headers_mut(), provider, &state.registry, &context);
         return response.into_response();
     }
 
@@ -519,8 +520,13 @@ pub async fn streaming_handler(
                     axum::http::header::CONTENT_TYPE,
                     HeaderValue::from_static("application/json"),
                 );
+                apply_response_headers(resp.headers_mut(), &provider, &state.registry, &base_context);
                 return resp;
             }
+
+            base_context.insert("status_code", &stream_status.as_u16());
+            let mut extra_headers = axum::http::HeaderMap::new();
+            apply_response_headers(&mut extra_headers, &provider, &state.registry, &base_context);
 
             let stream = stream::unfold((0, chunks, full_response, base_context, lifecycle, state_inner, trickle_ms, disconnect_pct, stream_fmt, encoding.clone(), is_raw_frame),
                 move |(idx, chunks, full_response, mut ctx, lifecycle, state, trickle_ms, disconnect_pct, stream_fmt, encoding, is_raw_frame)| async move {
@@ -675,6 +681,7 @@ pub async fn streaming_handler(
                 response.headers_mut().insert(axum::http::header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
                 response.headers_mut().insert(axum::http::header::CONNECTION, HeaderValue::from_static("keep-alive"));
             }
+            response.headers_mut().extend(extra_headers);
              
             return response;
          }
@@ -682,6 +689,30 @@ pub async fn streaming_handler(
 
     // No provider or stream config found
     (StatusCode::NOT_FOUND, "No streaming configuration found for this provider.").into_response()
+}
+
+/// Add the provider's `response_headers`, rendered against `ctx`.
+/// Empty values are skipped; invalid names or values are logged and skipped.
+fn apply_response_headers(
+    target: &mut axum::http::HeaderMap,
+    provider: &crate::provider::ProviderConfig,
+    registry: &crate::provider::ProviderRegistry,
+    ctx: &tera::Context,
+) {
+    for (name, tmpl) in &provider.response_headers {
+        let value = render_inline(registry, tmpl, ctx);
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        match (
+            axum::http::HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            (Ok(n), Ok(v)) => { target.insert(n, v); }
+            _ => tracing::warn!("Provider '{}': invalid response header {}: {:?}", provider.name, name, value),
+        }
+    }
 }
 
 /// Render a registered template; a failure is logged and renders as empty.

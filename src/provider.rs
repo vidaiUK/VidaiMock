@@ -59,6 +59,13 @@ pub struct ProviderConfig {
     /// Priority for matching (higher matches first)
     #[serde(default)]
     pub priority: i32,
+    /// Extra response headers, as `name: template`. Values are Tera templates
+    /// rendered with the request context (plus `status_code`); a header whose
+    /// value renders empty is not sent, so headers can be conditional:
+    /// `retry-after: "{% if status_code == 429 %}2{% endif %}"`.
+    /// Applies to normal, streaming and error responses.
+    #[serde(default)]
+    pub response_headers: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -430,6 +437,7 @@ impl ProviderConfig {
     fn inline_templates(&self) -> Vec<&str> {
         let mut out: Vec<&str> = self.request_mapping.values().map(String::as_str).collect();
         out.extend(self.response_body.as_deref());
+        out.extend(self.response_headers.values().map(String::as_str));
         out.extend(self.status_code.as_deref());
         if let Some(stream) = &self.stream {
             out.extend(stream.format.as_deref());

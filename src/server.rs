@@ -247,6 +247,7 @@ mod tests {
             status_code: None,
             error_template: None,
             priority: 0,
+            response_headers: Default::default(),
         };
         registry.add_provider(config).unwrap();
         Arc::new(registry)
@@ -361,6 +362,7 @@ mod tests {
             status_code: None,
             error_template: None,
             priority: 0,
+            response_headers: Default::default(),
         }).unwrap();
 
         // Anthropic
@@ -374,6 +376,7 @@ mod tests {
             status_code: None,
             error_template: None,
             priority: 0,
+            response_headers: Default::default(),
         }).unwrap();
 
         // Gemini
@@ -387,6 +390,7 @@ mod tests {
             status_code: None,
             error_template: None,
             priority: 0,
+            response_headers: Default::default(),
         }).unwrap();
 
         let app = create_app(config, None, Arc::new(registry)).await;

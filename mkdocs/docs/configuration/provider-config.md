@@ -18,6 +18,9 @@ response_template: "my/template.j2"  # Tera template for 2xx responses
 error_template: "my/error.j2"        # Tera template for 4xx/5xx responses
 status_code: "200"                   # static, or a Tera expression
 priority: 10                         # higher wins when multiple matchers hit
+response_headers:                    # extra headers; values are Tera templates
+  x-request-id: "req_{{ uuid }}"
+  retry-after: "{% if status_code == 429 %}2{% endif %}"   # empty -> not sent
 
 stream:
   enabled: true
@@ -64,6 +67,15 @@ Controls the HTTP status. Accepts:
 
 Both `{{ … }}` and `{% … %}` forms are rendered. This is how the bundled
 Anthropic provider enforces the `max_tokens` requirement.
+
+### `response_headers`
+
+Extra headers on every response from this provider: normal, streaming and
+error. Each value is a Tera template rendered with the request context plus
+`status_code`, so headers can depend on the outcome. A value that renders empty
+is not sent. A `content-type` entry overrides the default. The bundled OpenAI
+and Anthropic providers use this to send request ids, rate-limit headers, and
+`retry-after` on 429/503.
 
 ### `stream`
 
