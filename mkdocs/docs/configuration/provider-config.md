@@ -88,6 +88,12 @@ Templates can branch on the `method` variable.
 responses such as audio or video. Pair it with a `content-type` in
 `response_headers`.
 
+### `scenarios`
+
+`{dir, key}`: replay scripted responses from `<config-dir>/scenarios/<dir>/`,
+picked by the `X-Vidai-Scenario` header or the rendered `key`. See
+[Scenario playback](../streaming.md#scenario-playback).
+
 ### Request bodies
 
 Templates see the request body as `json`. JSON bodies are passed through;

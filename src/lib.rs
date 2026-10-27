@@ -61,6 +61,7 @@ use tokio::task::JoinHandle;
 mod aws_event_stream;
 mod handlers;
 mod replacer;
+mod scenario;
 
 // Reachable from the binary via `internal`, hidden from docs and excluded
 // from the public API contract. See the `internal` module below.

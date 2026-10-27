@@ -114,3 +114,42 @@ A streaming request that returns a tool call is **not** word-chunked as fake
 text. The tool call (`tool_calls` / `tool_use` / `functionCall`) is emitted
 as a single structured frame, single-line JSON, exactly as the real provider
 does. See [Tool calling](tool-calling.md).
+
+
+## Scenario playback
+
+For exact, scripted responses (event order, argument fragmentation, error
+bodies, timing) a provider can replay scenario files picked per request:
+
+```yaml
+name: "scn-openai"
+matcher: "^/scn/v1/chat/completions$"
+response_body: '{}'            # used when no scenario is requested
+scenarios:
+  dir: "openai"                # <config-dir>/scenarios/openai/
+  key: "{% if json.model is starting_with('scn-') %}{{ json.model | replace(from='scn-', to='') }}{% endif %}"
+stream: { enabled: true, frame_format: raw }
+```
+
+The id comes from the `X-Vidai-Scenario` header, or else from rendering `key`.
+An empty id means a normal response; an id with no files returns a 500 that
+names it, so a mis-wired test fails loudly. Files (all Tera templates):
+
+| File | Used for |
+|---|---|
+| `<id>.sse` / `<id>.sse.j2` | streaming requests: sent as written |
+| `<id>.body` / `<id>.json` (`.j2` too) | non-streaming requests, and any error status |
+| `<id>.status` | optional status code (default 200) |
+
+Each blank-line-separated event is its own network write, so clients see real
+event boundaries. Two SSE comment lines, removed before sending, script the
+timing:
+
+```text
+:vidai-delay 250      wait 250 ms before sending this event
+:vidai-split          end the current write here, mid-event
+```
+
+`X-Vidai-Chaos-Trickle` (or `chaos.trickle_ms`) sets the gap between events
+that have no `:vidai-delay`. Providers with `encoding: aws-event-stream` replay
+through the Bedrock binary encoder.

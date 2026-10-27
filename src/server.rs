@@ -251,6 +251,7 @@ mod tests {
             response_headers: Default::default(),
             methods: None,
             body_encoding: None,
+            scenarios: None,
         };
         registry.add_provider(config).unwrap();
         Arc::new(registry)
@@ -368,6 +369,7 @@ mod tests {
             response_headers: Default::default(),
             methods: None,
             body_encoding: None,
+            scenarios: None,
         }).unwrap();
 
         // Anthropic
@@ -384,6 +386,7 @@ mod tests {
             response_headers: Default::default(),
             methods: None,
             body_encoding: None,
+            scenarios: None,
         }).unwrap();
 
         // Gemini
@@ -400,6 +403,7 @@ mod tests {
             response_headers: Default::default(),
             methods: None,
             body_encoding: None,
+            scenarios: None,
         }).unwrap();
 
         let app = create_app(config, None, Arc::new(registry)).await;

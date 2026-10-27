@@ -280,6 +280,10 @@ pub async fn mock_handler(
             context.insert(key, &val);
         }
 
+        if let Some(id) = crate::scenario::requested_id(provider, &state.registry, &headers, &context) {
+            return crate::scenario::respond(&state, provider, &mut context, &id, false, &headers).await;
+        }
+
         // Resolve status first so we know whether to render error_template or response_template.
         let (status, source) = resolve_status_code(
             chaos, &headers, &query_params, provider.status_code.as_deref(), &context, &state);
@@ -451,6 +455,10 @@ pub async fn streaming_handler(
                     }
                 };
                 base_context.insert(key, &val);
+            }
+
+            if let Some(id) = crate::scenario::requested_id(&provider, &state.registry, &headers, &base_context) {
+                return crate::scenario::respond(&state, &provider, &mut base_context, &id, true, &headers).await;
             }
 
             // Simulate chunks (for now, still split by whitespace until we implement better tokenization/generation)
@@ -754,7 +762,7 @@ async fn parse_request_body(headers: &HeaderMap, body: axum::body::Bytes) -> Val
 
 /// Add the provider's `response_headers`, rendered against `ctx`.
 /// Empty values are skipped; invalid names or values are logged and skipped.
-fn apply_response_headers(
+pub(crate) fn apply_response_headers(
     target: &mut axum::http::HeaderMap,
     provider: &crate::provider::ProviderConfig,
     registry: &crate::provider::ProviderRegistry,
@@ -777,7 +785,7 @@ fn apply_response_headers(
 }
 
 /// Render a registered template; a failure is logged and renders as empty.
-fn render_path(registry: &crate::provider::ProviderRegistry, path: &str, ctx: &tera::Context) -> String {
+pub(crate) fn render_path(registry: &crate::provider::ProviderRegistry, path: &str, ctx: &tera::Context) -> String {
     registry.tera.render(path, ctx).unwrap_or_else(|e| {
         tracing::warn!("Template '{}' failed to render: {}", path, render_error_chain(&e));
         String::new()
@@ -785,7 +793,7 @@ fn render_path(registry: &crate::provider::ProviderRegistry, path: &str, ctx: &t
 }
 
 /// Render an inline template string; a failure is logged and renders as empty.
-fn render_inline(registry: &crate::provider::ProviderRegistry, tmpl: &str, ctx: &tera::Context) -> String {
+pub(crate) fn render_inline(registry: &crate::provider::ProviderRegistry, tmpl: &str, ctx: &tera::Context) -> String {
     registry.render_str(tmpl, ctx).unwrap_or_else(|e| {
         let preview: String = tmpl.chars().take(60).collect();
         tracing::warn!("Inline template '{}…' failed to render: {}", preview, render_error_chain(&e));

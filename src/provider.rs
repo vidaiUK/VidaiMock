@@ -73,6 +73,18 @@ pub struct ProviderConfig {
     /// for binary responses such as audio. Default: sent as rendered.
     #[serde(default)]
     pub body_encoding: Option<String>,
+    /// Scripted responses picked per request. See `scenarios` in the docs.
+    #[serde(default)]
+    pub scenarios: Option<ScenarioConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScenarioConfig {
+    /// Folder under `<config-dir>/scenarios/` holding this provider's scenarios.
+    pub dir: String,
+    /// Template giving the scenario id, e.g. from the model name. Empty means
+    /// "no scenario" (normal response). `X-Vidai-Scenario` always wins.
+    pub key: Option<String>,
 }
 
 impl ProviderConfig {
@@ -316,6 +328,25 @@ impl ProviderRegistry {
             }
         }
 
+        // 3. Scenario scripts: <config-dir>/scenarios/** (and embedded scenarios/**),
+        //    registered as "scenarios/<dir>/<file>".
+        if !isolated {
+            for file in Asset::iter() {
+                if file.starts_with("scenarios/") {
+                    if let Some(content) = Asset::get(&file) {
+                        template_map.insert(file.to_string(), std::str::from_utf8(content.data.as_ref())?.to_string());
+                    }
+                }
+            }
+        }
+        let scenarios_root = config_dir.join("scenarios");
+        if let Ok(entries) = glob(scenarios_root.join("**/*").to_str().ok_or("Invalid scenario path")?) {
+            for path in entries.flatten().filter(|p| p.is_file()) {
+                let rel = path.strip_prefix(&scenarios_root)?.to_str().ok_or("Invalid path")?.replace('\\', "/");
+                template_map.insert(format!("scenarios/{rel}"), fs::read_to_string(&path)?);
+            }
+        }
+
         // b. Add all collected templates to Tera
         for (name, content) in template_map {
             // Register with the relative name (e.g., openai/chat.json.j2)
@@ -468,6 +499,7 @@ impl ProviderConfig {
         let mut out: Vec<&str> = self.request_mapping.values().map(String::as_str).collect();
         out.extend(self.response_body.as_deref());
         out.extend(self.response_headers.values().map(String::as_str));
+        out.extend(self.scenarios.as_ref().and_then(|c| c.key.as_deref()));
         out.extend(self.status_code.as_deref());
         if let Some(stream) = &self.stream {
             out.extend(stream.format.as_deref());
