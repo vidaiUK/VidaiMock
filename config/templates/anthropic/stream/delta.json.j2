@@ -15,5 +15,5 @@ event: content_block_delta
 {% if is_tool_mode -%}
 data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}
 {%- else -%}
-data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"{{ chunk }}"}}
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":{{ chunk | json_encode() }}}}
 {%- endif %}

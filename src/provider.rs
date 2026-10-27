@@ -347,6 +347,14 @@ impl ProviderRegistry {
         self.providers.clear();
         self.compiled_matchers.clear();
         for config in all_configs {
+            // Compile inline template strings into the shared engine, so they
+            // get the registered helpers (uuid(), timestamp(), has_tool_result, …)
+            // and are parsed once instead of on every render.
+            for s in config.inline_templates() {
+                if let Err(e) = tera.add_raw_template(&inline_template_name(s), s) {
+                    tracing::warn!("Provider '{}': inline template does not compile: {}", config.name, e);
+                }
+            }
             let regex = Regex::new(&config.matcher)?;
             self.compiled_matchers.push((regex, self.providers.len()));
             self.providers.push(config);
@@ -394,7 +402,38 @@ impl ProviderRegistry {
 
     /// Renders an ad-hoc string using the registered Tera instance
     pub fn render_str(&self, template: &str, context: &tera::Context) -> tera::Result<String> {
+        let name = inline_template_name(template);
+        if self.tera.templates.contains_key(&name) {
+            return self.tera.render(&name, context);
+        }
+        // Not from a provider config (e.g. added at runtime): parse on the fly.
         tera::Tera::one_off(template, context, false)
+    }
+}
+
+/// Stable registry name for an inline template string.
+fn inline_template_name(template: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    template.hash(&mut h);
+    format!("__inline/{:016x}", h.finish())
+}
+
+impl ProviderConfig {
+    /// Every inline template string in this config.
+    fn inline_templates(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = self.request_mapping.values().map(String::as_str).collect();
+        out.extend(self.response_body.as_deref());
+        out.extend(self.status_code.as_deref());
+        if let Some(stream) = &self.stream {
+            out.extend(stream.format.as_deref());
+            if let Some(lc) = &stream.lifecycle {
+                for ev in [&lc.on_start, &lc.on_chunk, &lc.on_stop].into_iter().flatten() {
+                    out.extend(ev.template_body.as_deref());
+                }
+            }
+        }
+        out
     }
 }
 

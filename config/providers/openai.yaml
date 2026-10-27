@@ -10,7 +10,7 @@ stream:
   frame_format: raw
   lifecycle:
     on_chunk:
-       template_body: 'data: {"id":"chatcmpl-mock","object":"chat.completion.chunk","created":1699000000,"model":"{{ model }}","choices":[{"index":0,"delta":{% if chunk is string %}{"content":"{{ chunk }}"}{% else %}{"tool_calls":{{ chunk | json_encode() }}}{% endif %},"finish_reason":null}]}'
+       template_body: 'data: {"id":"chatcmpl-{{ uuid }}","object":"chat.completion.chunk","created":1699000000,"model":"{{ json.model | default(value=model) }}","choices":[{"index":0,"delta":{% if chunk is string %}{"content":{{ chunk | json_encode() }}}{% else %}{"tool_calls":{{ chunk | json_encode() }}}{% endif %},"finish_reason":null}]}'
     # Terminal sequence matches real OpenAI: a finish_reason chunk with empty
     # delta, then (optionally) a usage-only chunk when stream_options.include_usage
     # is set, then the [DONE] sentinel. Each event separated by a blank line

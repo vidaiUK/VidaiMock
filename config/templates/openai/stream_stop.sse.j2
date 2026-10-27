@@ -8,10 +8,10 @@
 
     Blank lines appear as empty lines in the rendered output; the
     raw-frame renderer preserves them as SSE frame separators. -#}
-data: {"id":"chatcmpl-mock","object":"chat.completion.chunk","created":1699000000,"model":"{{ model }}","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+data: {"id":"chatcmpl-{{ uuid }}","object":"chat.completion.chunk","created":1699000000,"model":"{{ json.model | default(value=model) }}","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
 
 {% if json.stream_options is defined and json.stream_options.include_usage is defined and json.stream_options.include_usage -%}
-data: {"id":"chatcmpl-mock","object":"chat.completion.chunk","created":1699000000,"model":"{{ model }}","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20}}
+data: {"id":"chatcmpl-{{ uuid }}","object":"chat.completion.chunk","created":1699000000,"model":"{{ json.model | default(value=model) }}","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20}}
 
 {% endif -%}
 data: [DONE]

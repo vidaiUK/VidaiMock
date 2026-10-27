@@ -432,9 +432,9 @@ pub async fn streaming_handler(
 
             // Simulate chunks (for now, still split by whitespace until we implement better tokenization/generation)
             let full_response = if let Some(template_path) = &provider.response_template {
-                 state.registry.tera.render(template_path, &base_context).unwrap_or_default()
+                 render_path(&state.registry, template_path, &base_context)
             } else if let Some(body) = &provider.response_body {
-                 state.registry.render_str(body, &base_context).unwrap_or_default()
+                 render_inline(&state.registry, body, &base_context)
             } else {
                  String::new()
             };
@@ -506,9 +506,9 @@ pub async fn streaming_handler(
                 let chosen_template = provider.error_template.as_deref()
                     .or(provider.response_template.as_deref());
                 let body = if let Some(tpl) = chosen_template {
-                    state.registry.tera.render(tpl, &base_context).unwrap_or_default()
+                    render_path(&state.registry, tpl, &base_context)
                 } else if let Some(b) = &provider.response_body {
-                    state.registry.render_str(b, &base_context).unwrap_or_default()
+                    render_inline(&state.registry, b, &base_context)
                 } else {
                     String::new()
                 };
@@ -539,9 +539,9 @@ pub async fn streaming_handler(
                         if let Some(on_start) = &lc.on_start {
                              // Context setup?
                              if let Some(tmpl) = &on_start.template_body {
-                                 Some(tera::Tera::one_off(tmpl, &ctx, false).unwrap_or_default())
+                                 Some(render_inline(&state.registry, tmpl, &ctx))
                              } else if let Some(path) = &on_start.template_path {
-                                 Some(state.registry.tera.render(path, &ctx).unwrap_or_default())
+                                 Some(render_path(&state.registry, path, &ctx))
                              } else {
                                  None 
                              }
@@ -558,9 +558,9 @@ pub async fn streaming_handler(
                         if let Some(on_chunk) = &lc.on_chunk {
                              // Context already has "chunk"
                              if let Some(tmpl) = &on_chunk.template_body {
-                                 Some(tera::Tera::one_off(tmpl, &ctx, false).unwrap_or_default())
+                                 Some(render_inline(&state.registry, tmpl, &ctx))
                              } else if let Some(path) = &on_chunk.template_path {
-                                 Some(state.registry.tera.render(path, &ctx).unwrap_or_default())
+                                 Some(render_path(&state.registry, path, &ctx))
                              } else {
                                  Some(chunk.to_string())
                              }
@@ -569,7 +569,7 @@ pub async fn streaming_handler(
                              if let Some(fmt) = &stream_fmt {
                                  let mut chunk_ctx = ctx.clone();
                                  chunk_ctx.insert("chunk", &chunk);
-                                 Some(tera::Tera::one_off(fmt, &chunk_ctx, false).unwrap_or_else(|_| chunk.to_string()))
+                                 Some(state.registry.render_str(fmt, &chunk_ctx).unwrap_or_else(|_| chunk.to_string()))
                              } else {
                                  Some(chunk.to_string())
                              }
@@ -582,9 +582,9 @@ pub async fn streaming_handler(
                     if let Some(lc) = &lifecycle {
                          if let Some(on_stop) = &lc.on_stop {
                              if let Some(tmpl) = &on_stop.template_body {
-                                  Some(tera::Tera::one_off(tmpl, &ctx, false).unwrap_or_default())
+                                  Some(render_inline(&state.registry, tmpl, &ctx))
                              } else if let Some(path) = &on_stop.template_path {
-                                 Some(state.registry.tera.render(path, &ctx).unwrap_or_default())
+                                 Some(render_path(&state.registry, path, &ctx))
                              } else { None }
                          } else { None }
                     } else { 
@@ -595,6 +595,8 @@ pub async fn streaming_handler(
                 let next_idx = idx + 1;
                 sleep(Duration::from_millis(trickle_ms)).await;
                 
+                // A template that rendered nothing emits no frame (not an empty `data:`).
+                let raw_data = raw_data.filter(|d| !d.trim().is_empty());
                 if let Some(data) = raw_data {
                     // Format output based on encoding
                     if encoding == "aws-event-stream" {
@@ -646,7 +648,10 @@ pub async fn streaming_handler(
                         if let Some(name) = event_name {
                              buf.extend_from_slice(format!("event: {}\n", name).as_bytes());
                         }
-                        buf.extend_from_slice(format!("data: {}\n", minified).as_bytes());
+                        // SSE spec: a multi-line payload is one `data:` line per line.
+                        for line in minified.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                            buf.extend_from_slice(format!("data: {}\n", line).as_bytes());
+                        }
                         buf.extend_from_slice(b"\n");
                         Some((Ok::<_, Infallible>(axum::body::Bytes::from(buf)), (next_idx, chunks, full_response, ctx, lifecycle, state, trickle_ms, disconnect_pct, stream_fmt, encoding, is_raw_frame)))
                     }
@@ -676,6 +681,35 @@ pub async fn streaming_handler(
 
     // No provider or stream config found
     (StatusCode::NOT_FOUND, "No streaming configuration found for this provider.").into_response()
+}
+
+/// Render a registered template; a failure is logged and renders as empty.
+fn render_path(registry: &crate::provider::ProviderRegistry, path: &str, ctx: &tera::Context) -> String {
+    registry.tera.render(path, ctx).unwrap_or_else(|e| {
+        tracing::warn!("Template '{}' failed to render: {}", path, render_error_chain(&e));
+        String::new()
+    })
+}
+
+/// Render an inline template string; a failure is logged and renders as empty.
+fn render_inline(registry: &crate::provider::ProviderRegistry, tmpl: &str, ctx: &tera::Context) -> String {
+    registry.render_str(tmpl, ctx).unwrap_or_else(|e| {
+        let preview: String = tmpl.chars().take(60).collect();
+        tracing::warn!("Inline template '{}…' failed to render: {}", preview, render_error_chain(&e));
+        String::new()
+    })
+}
+
+/// Tera hides the useful cause (e.g. "Variable `x` not found") in the source chain.
+fn render_error_chain(e: &tera::Error) -> String {
+    let mut msg = e.to_string();
+    let mut src = std::error::Error::source(e);
+    while let Some(cause) = src {
+        msg.push_str(": ");
+        msg.push_str(&cause.to_string());
+        src = cause.source();
+    }
+    msg
 }
 
 fn minify_json(s: String) -> String {
