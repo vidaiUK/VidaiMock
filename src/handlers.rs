@@ -469,6 +469,7 @@ pub async fn streaming_handler(
             let stream_fmt = stream_config.format.clone();
             let encoding = stream_config.encoding.clone().unwrap_or_default(); // "aws-event-stream" or empty for SSE
             let is_raw_frame = stream_config.frame_format.as_deref() == Some("raw");
+            let aws_mode = crate::aws_event_stream::AwsPayload::from_config(stream_config.aws_payload.as_deref());
             
             let mut trickle_ms = state.config.chaos.trickle_ms;
             let mut disconnect_pct = state.config.chaos.disconnect_pct;
@@ -600,7 +601,7 @@ pub async fn streaming_handler(
                 if let Some(data) = raw_data {
                     // Format output based on encoding
                     if encoding == "aws-event-stream" {
-                        let bytes = crate::aws_event_stream::AwsEventStreamEncoder::encode_chunk(&data);
+                        let bytes = crate::aws_event_stream::AwsEventStreamEncoder::encode_template_output(&data, aws_mode);
                         Some((Ok::<_, Infallible>(axum::body::Bytes::from(bytes)), (next_idx, chunks, full_response, ctx, lifecycle, state, trickle_ms, disconnect_pct, stream_fmt, encoding, is_raw_frame)))
                     } else if is_raw_frame {
                         // Raw frame mode: template controls SSE framing.

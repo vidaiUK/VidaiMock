@@ -10,5 +10,4 @@
     "{{ chunk }}" and Tera stringifies it as the literal "[[object]]" — the
     same defect fixed for /v1/responses in VM-012 (issue #8). Mirrors the
     inline chunk template in providers/openai.yaml (VM-013).
--#}
-{"id":"chatcmpl-{{ uuid }}","object":"chat.completion.chunk","created":{{ timestamp() }},"model":"{{ json.model }}","choices":[{"index":0,"delta":{% if chunk is string %}{"content":{{ chunk | json_encode() }}}{% else %}{"tool_calls":{{ chunk | json_encode() }}}{% endif %},"finish_reason":null}]}
+-#}{"id":"chatcmpl-{{ uuid }}","object":"chat.completion.chunk","created":{{ timestamp() }},"model":"{{ json.model | default(value=model) }}","choices":[{"index":0,"delta":{% if chunk is string %}{"content":{{ chunk | json_encode() }}}{% else %}{"tool_calls":{{ chunk | json_encode() }}}{% endif %},"finish_reason":null}]}

@@ -73,6 +73,16 @@ hands full SSE framing to the templates (needed for typed-event providers
 like the Responses API and Anthropic). See
 [Writing templates](templates.md) and [Streaming](../streaming.md).
 
+`encoding: aws-event-stream` sends the binary AWS event stream that Bedrock
+uses instead of SSE. Templates write events in the same `event:` / `data:`
+form as raw SSE, and one template may emit several events. `aws_payload`
+picks the Bedrock flavour:
+
+| `aws_payload` | Wire shape | Used by |
+|---|---|---|
+| `bytes` (default) | every event is `:event-type chunk` with payload `{"bytes": "<base64 of the data JSON>"}`; `event:` lines are ignored | InvokeModelWithResponseStream |
+| `json` | `:event-type` is the template's `event:` name; payload is the data JSON as written | ConverseStream |
+
 ## Chaos & error injection summary
 
 | Trigger | Where |

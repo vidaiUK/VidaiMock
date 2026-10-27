@@ -70,6 +70,12 @@ pub struct ProviderStreamConfig {
     pub format: Option<String>,
     /// Encoding for the stream (e.g. "aws-event-stream"). Default is SSE.
     pub encoding: Option<String>,
+    /// With `encoding: aws-event-stream`: "bytes" (default) sends every event
+    /// as `chunk` + `{"bytes": base64}` (InvokeModelWithResponseStream); "json"
+    /// sends typed events named by the template's `event:` line with plain
+    /// JSON payloads (ConverseStream).
+    #[serde(default)]
+    pub aws_payload: Option<String>,
     /// Controls SSE frame wrapping. Default "sse" auto-prefixes each chunk with "data: ".
     /// Set to "raw" to emit template output verbatim — the template controls all framing
     /// including event: and data: lines. Required for providers with typed SSE events.

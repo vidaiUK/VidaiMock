@@ -22,60 +22,102 @@ use base64::prelude::*;
 
 pub struct AwsEventStreamEncoder;
 
+/// How lifecycle template output becomes AWS event-stream messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AwsPayload {
+    /// InvokeModelWithResponseStream: every event is `:event-type chunk` with
+    /// payload `{"bytes":"<base64 of the template's JSON>"}`.
+    Bytes,
+    /// ConverseStream: `:event-type` comes from the template's `event:` line
+    /// and the payload is the JSON as written.
+    Json,
+}
+
+impl AwsPayload {
+    pub fn from_config(value: Option<&str>) -> Self {
+        match value {
+            Some("json") => AwsPayload::Json,
+            _ => AwsPayload::Bytes,
+        }
+    }
+}
+
 impl AwsEventStreamEncoder {
     /// Encodes a payload into an AWS Event Stream binary message.
-    /// 
-    /// The payload is expected to be a valid JSON string (e.g. `{"type":"content_block_delta"...}`).
-    /// This function:
-    /// 1. Base64 encodes that JSON.
-    /// 2. Wraps it in `{"bytes": "..."}` JSON object.
-    /// 3. Frames it with AWS Event Stream binary headers and CRCs.
+    ///
+    /// The payload is base64-encoded, wrapped in `{"bytes": "..."}` and framed
+    /// as a `chunk` event — the InvokeModelWithResponseStream shape.
     pub fn encode_chunk(payload_json: &str) -> Vec<u8> {
-        // 1. Base64 encode the inner payload
-        let b64_payload = BASE64_STANDARD.encode(payload_json);
-        
-        // 2. Wrap in {"bytes": "..."}
-        let outer_payload = format!(r#"{{"bytes":"{}"}}"#, b64_payload);
-        let payload_bytes = outer_payload.as_bytes();
+        Self::encode_event("chunk", &bytes_envelope(payload_json))
+    }
 
-        // 3. Prepare headers
+    /// Encodes one AWS Event Stream message with the given `:event-type` and
+    /// payload, sent as is.
+    pub fn encode_event(event_type: &str, payload: &str) -> Vec<u8> {
+        let payload_bytes = payload.as_bytes();
+
         let mut headers = Vec::new();
-        // :event-type = chunk
-        write_header(&mut headers, ":event-type", "chunk");
-        // :content-type = application/json
+        write_header(&mut headers, ":event-type", event_type);
         write_header(&mut headers, ":content-type", "application/json");
-        // :message-type = event
         write_header(&mut headers, ":message-type", "event");
 
-        // 4. Calculate lengths
         // Total Len (4) + Headers Len (4) + Prelude CRC (4) + Headers + Payload + Message CRC (4)
         let total_len = 4 + 4 + 4 + headers.len() as u32 + payload_bytes.len() as u32 + 4;
         let headers_len = headers.len() as u32;
 
         let mut message = Vec::with_capacity(total_len as usize);
-
-        // 5. Write Prelude (Total Len + Headers Len)
         message.extend_from_slice(&total_len.to_be_bytes());
         message.extend_from_slice(&headers_len.to_be_bytes());
 
-        // 6. Prelude CRC
         let mut crc = Hasher::new();
         crc.update(&message[0..8]);
         message.extend_from_slice(&crc.finalize().to_be_bytes());
 
-        // 7. Write Headers
         message.extend_from_slice(&headers);
-
-        // 8. Write Payload
         message.extend_from_slice(payload_bytes);
 
-        // 9. Message CRC
         let mut crc = Hasher::new();
-        crc.update(&message); // Everything so far
+        crc.update(&message);
         message.extend_from_slice(&crc.finalize().to_be_bytes());
 
         message
     }
+
+    /// Encodes one lifecycle template's output as one or more messages.
+    ///
+    /// Output written as SSE-style blocks (`event: x` / `data: {...}`,
+    /// separated by blank lines) yields one message per `data:` line, so one
+    /// template can emit several events. Output with no `data:` line is sent
+    /// as a single message (the original behaviour).
+    pub fn encode_template_output(output: &str, mode: AwsPayload) -> Vec<u8> {
+        let has_blocks = output.lines().any(|l| l.trim_start().starts_with("data:"));
+        if !has_blocks {
+            return match mode {
+                AwsPayload::Bytes => Self::encode_chunk(output.trim()),
+                AwsPayload::Json => Self::encode_event("chunk", output.trim()),
+            };
+        }
+        let mut out = Vec::new();
+        let mut event_type: Option<String> = None;
+        for line in output.lines().map(str::trim) {
+            if line.is_empty() {
+                event_type = None;
+            } else if let Some(name) = line.strip_prefix("event:") {
+                event_type = Some(name.trim().to_string());
+            } else if let Some(data) = line.strip_prefix("data:") {
+                let data = data.trim();
+                out.extend(match mode {
+                    AwsPayload::Bytes => Self::encode_chunk(data),
+                    AwsPayload::Json => Self::encode_event(event_type.as_deref().unwrap_or("chunk"), data),
+                });
+            }
+        }
+        out
+    }
+}
+
+fn bytes_envelope(payload_json: &str) -> String {
+    format!(r#"{{"bytes":"{}"}}"#, BASE64_STANDARD.encode(payload_json))
 }
 
 /// Helper to write an AWS Event Stream String Header

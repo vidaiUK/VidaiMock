@@ -5,18 +5,26 @@ request_mapping:
 response_template: "bedrock/converse.json.j2"
 stream:
   enabled: true
+  # ConverseStream: typed AWS events (messageStart, contentBlockDelta,
+  # contentBlockStop, messageStop, metadata) with plain JSON payloads.
   encoding: "aws-event-stream"
+  aws_payload: "json"
   lifecycle:
     on_start:
-      event_name: "message_start"
       template_body: |
-        {"type":"message_start","message":{"id":"msg_{{ uuid() }}"}}
+        event: messageStart
+        data: {"role":"assistant"}
     on_chunk:
-      event_name: "content_block_delta" 
       template_body: |
-        {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":{{ chunk | json_encode() }}}}
+        event: contentBlockDelta
+        data: {"contentBlockIndex":0,"delta":{"text":{{ chunk | json_encode() }}}}
     on_stop:
-      event_name: "message_stop"
       template_body: |
-        {"type":"message_stop"}
+        event: contentBlockStop
+        data: {"contentBlockIndex":0}
 
+        event: messageStop
+        data: {"stopReason":"end_turn"}
+
+        event: metadata
+        data: {"usage":{"inputTokens":10,"outputTokens":{{ chunk_count }},"totalTokens":{{ 10 + chunk_count }}},"metrics":{"latencyMs":150}}
