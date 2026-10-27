@@ -457,6 +457,14 @@ pub async fn streaming_handler(
                     vec![content_val]
                 };
             
+            // Total chunk count, visible to every lifecycle template (start, chunk, stop).
+            // on_chunk also gets a zero-based `chunk_index` (issue #11).
+            base_context.insert("chunk_count", &chunks.len());
+            // Exactly what the text chunks concatenate to, so closing events
+            // (e.g. Responses `output_text.done`) can repeat the streamed text.
+            let stream_text: String = chunks.iter().filter_map(|c| c.as_str()).collect();
+            base_context.insert("stream_text", &stream_text);
+
             let lifecycle = stream_config.lifecycle.clone();
             let stream_fmt = stream_config.format.clone();
             let encoding = stream_config.encoding.clone().unwrap_or_default(); // "aws-event-stream" or empty for SSE
@@ -541,8 +549,10 @@ pub async fn streaming_handler(
                     } else { None }
                 } else if idx <= chunks.len() {
                     // Chunk Event
-                    let chunk = &chunks[idx-1];
+                    let chunk_index = idx - 1;
+                    let chunk = &chunks[chunk_index];
                     ctx.insert("chunk", chunk);
+                    ctx.insert("chunk_index", &chunk_index);
                     
                     if let Some(lc) = &lifecycle {
                         if let Some(on_chunk) = &lc.on_chunk {

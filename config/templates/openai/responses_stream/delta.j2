@@ -30,8 +30,8 @@
 {%- set is_tool_mode = json.tools and json.tools | length > 0 and not has_tool_result -%}
 {% if is_tool_mode -%}
 event: response.function_call_arguments.delta
-data: {"type":"response.function_call_arguments.delta","sequence_number":4,"item_id":"fc_{{ uuid }}","output_index":0,"delta":"{\"city\":\"Paris\"}"}
+data: {"type":"response.function_call_arguments.delta","sequence_number":{{ 3 + chunk_index }},"item_id":"fc_{{ uuid }}","output_index":0,"delta":"{\"city\":\"Paris\"}"}
 {%- else -%}
 event: response.output_text.delta
-data: {"type":"response.output_text.delta","sequence_number":4,"output_index":0,"content_index":0,"delta":"{{ chunk }}"}
+data: {"type":"response.output_text.delta","sequence_number":{{ 4 + chunk_index }},"output_index":0,"content_index":0,"delta":{{ chunk | json_encode() }}}
 {%- endif %}

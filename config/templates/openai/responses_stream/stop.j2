@@ -31,25 +31,27 @@
 {%- endif -%}
 {%- set is_tool_mode = json.tools and json.tools | length > 0 and not has_tool_result -%}
 {%- set tool_name = json.tools.0.name | default(value='mock_function') -%}
+{#- Closing events follow the last delta. start.j2 emits 4 events for text (0-3) and 3 for a function call (0-2); one delta per chunk follows. -#}
+{%- if is_tool_mode %}{% set seq0 = 3 + chunk_count %}{% else %}{% set seq0 = 4 + chunk_count %}{% endif -%}
 {% if is_tool_mode -%}
 event: response.function_call_arguments.done
-data: {"type":"response.function_call_arguments.done","sequence_number":5,"item_id":"fc_{{ uuid }}","output_index":0,"name":"{{ tool_name }}","arguments":"{\"city\":\"Paris\"}"}
+data: {"type":"response.function_call_arguments.done","sequence_number":{{ seq0 }},"item_id":"fc_{{ uuid }}","output_index":0,"name":"{{ tool_name }}","arguments":"{\"city\":\"Paris\"}"}
 
 event: response.output_item.done
-data: {"type":"response.output_item.done","sequence_number":6,"output_index":0,"item":{"id":"fc_{{ uuid }}","type":"function_call","call_id":"call_{{ uuid }}","name":"{{ tool_name }}","arguments":"{\"city\":\"Paris\"}","status":"completed"}}
+data: {"type":"response.output_item.done","sequence_number":{{ seq0 + 1 }},"output_index":0,"item":{"id":"fc_{{ uuid }}","type":"function_call","call_id":"call_{{ uuid }}","name":"{{ tool_name }}","arguments":"{\"city\":\"Paris\"}","status":"completed"}}
 
 event: response.completed
-data: {"type":"response.completed","sequence_number":7,"response":{"id":"resp_{{ uuid }}","object":"response","created_at":{{ timestamp() }},"status":"completed","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[{"id":"fc_{{ uuid }}","type":"function_call","call_id":"call_{{ uuid }}","name":"{{ tool_name }}","arguments":"{\"city\":\"Paris\"}","status":"completed"}],"usage":{"input_tokens":18,"output_tokens":25,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":43}}}
+data: {"type":"response.completed","sequence_number":{{ seq0 + 2 }},"response":{"id":"resp_{{ uuid }}","object":"response","created_at":{{ timestamp() }},"status":"completed","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[{"id":"fc_{{ uuid }}","type":"function_call","call_id":"call_{{ uuid }}","name":"{{ tool_name }}","arguments":"{\"city\":\"Paris\"}","status":"completed"}],"usage":{"input_tokens":18,"output_tokens":25,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":43}}}
 {%- else -%}
 event: response.output_text.done
-data: {"type":"response.output_text.done","sequence_number":5,"output_index":0,"content_index":0,"text":"mock response complete"}
+data: {"type":"response.output_text.done","sequence_number":{{ seq0 }},"output_index":0,"content_index":0,"text":{{ stream_text | json_encode() }}}
 
 event: response.content_part.done
-data: {"type":"response.content_part.done","sequence_number":6,"output_index":0,"content_index":0,"part":{"type":"output_text","text":"mock response complete","annotations":[]}}
+data: {"type":"response.content_part.done","sequence_number":{{ seq0 + 1 }},"output_index":0,"content_index":0,"part":{"type":"output_text","text":{{ stream_text | json_encode() }},"annotations":[]}}
 
 event: response.output_item.done
-data: {"type":"response.output_item.done","sequence_number":7,"output_index":0,"item":{"id":"msg_{{ uuid }}","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"mock response complete","annotations":[]}]}}
+data: {"type":"response.output_item.done","sequence_number":{{ seq0 + 2 }},"output_index":0,"item":{"id":"msg_{{ uuid }}","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":{{ stream_text | json_encode() }},"annotations":[]}]}}
 
 event: response.completed
-data: {"type":"response.completed","sequence_number":8,"response":{"id":"resp_{{ uuid }}","object":"response","created_at":{{ timestamp() }},"status":"completed","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[{"id":"msg_{{ uuid }}","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"mock response complete","annotations":[]}]}],"usage":{"input_tokens":18,"output_tokens":25,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":43}}}
+data: {"type":"response.completed","sequence_number":{{ seq0 + 3 }},"response":{"id":"resp_{{ uuid }}","object":"response","created_at":{{ timestamp() }},"status":"completed","model":"{{ json.model | default(value='gpt-4o-mini') }}","output":[{"id":"msg_{{ uuid }}","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":{{ stream_text | json_encode() }},"annotations":[]}]}],"usage":{"input_tokens":18,"output_tokens":25,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":43}}}
 {%- endif %}
