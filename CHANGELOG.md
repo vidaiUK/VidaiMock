@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Added
+- Stream templates get `chunk_index` (zero-based), `chunk_count` and
+  `stream_text` (#11).
+- `response_headers` in provider config (templated, conditional). Bundled
+  OpenAI and Anthropic send request ids, rate-limit headers and `retry-after`
+  on 429/503.
+- Routes: Anthropic `/v1/messages/count_tokens`; legacy `/v1/completions`
+  (streaming too); `GET`/`DELETE /v1/responses/{id}` and `/input_items`;
+  `/v1/audio/speech`, `/transcriptions`, `/translations`; `/v1/videos`
+  create/list/get/delete/content; Mistral `/v1/ocr`; `/v1/images/edits` and
+  `/variations`.
+- Provider `methods` (default POST), `body_encoding: base64` for binary
+  bodies, multipart request bodies, and `method` in the template context.
+- Scenario playback: `scenarios: {dir, key}` replays scripted `.sse` /
+  `.body` / `.status` files per request (`X-Vidai-Scenario` or a key such as
+  the model name), one network write per event, with `:vidai-delay` and
+  `:vidai-split` directives.
+- `X-Vidai-Usage` sets exact usage numbers (input, output, cached,
+  cache_write, reasoning) in each provider's own usage shape.
+- `X-Vidai-Output-Tokens: n|max` scales output length and reported tokens.
+- `max_body_mb` (TOML, `VIDAIMOCK_MAX_BODY_MB`, `--max-body-mb`, builder);
+  default 32 MiB, was a fixed 2 MiB.
+- `stream.aws_payload` (`bytes`|`json`) for Bedrock event streams.
+
+### Fixed
+- Responses stream `sequence_number` is contiguous (was 4 for every delta and
+  skipped 3 for tool calls); `output_text.done` and the closing events carry
+  the streamed text, not a placeholder.
+- Stream text is JSON-escaped in every bundled template; quotes or
+  backslashes no longer break frames (stock OpenAI JSON-mode streams were
+  invalid). Azure/Mistral prompt echo is escaped too.
+- OpenAI streams keep one id per stream and report the requested model.
+- Azure streams send a `finish_reason` chunk; Vertex streams like Gemini
+  (no `[DONE]`); Bedrock `/invoke` returns the Anthropic Messages body;
+  `invoke-with-response-stream` carries the Anthropic events (was empty
+  `bytes`); `converse-stream` sends real Converse events.
+- Inline templates (`template_body`, `response_body`, …) can use helpers such
+  as `uuid()` and `has_tool_result`, and are parsed once at load.
+- Template render failures and invalid provider YAML are logged instead of
+  silently producing empty output or a missing provider.
+- SSE mode: multi-line payloads get one `data:` line per line; a template that
+  renders nothing sends no frame.
+
 ## [0.3.1] - 2026-08-04
 ### Added
 - `MockServerBuilder::latency_ms()` and `::mode()` — the library equivalents
