@@ -11,7 +11,7 @@
      - o-series model                                -> reasoning usage tokens
      - default                                       -> plain assistant text
 #}
-{% if json.tools is defined and json.tools | length > 0 and has_tool_result(messages=json.messages, provider="openai") %}
+{% if json.tools is defined and json.tools | length > 0 and has_tool_result(messages=json.messages | default(value=[]), provider="openai") %}
 {
   "id": "chatcmpl-{{ uuid() }}",
   "object": "chat.completion",

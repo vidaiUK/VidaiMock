@@ -10,7 +10,7 @@
     for mock purposes we emit a single `{}` delta which any accumulator
     reads as an empty-but-valid argument object.
 -#}
-{%- set is_tool_mode = json.tools and not has_tool_result(messages=json.messages, provider="anthropic") -%}
+{%- set is_tool_mode = json.tools and not has_tool_result(messages=json.messages | default(value=[]), provider="anthropic") -%}
 event: content_block_delta
 {% if is_tool_mode -%}
 data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}

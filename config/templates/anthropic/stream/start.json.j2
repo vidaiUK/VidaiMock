@@ -10,7 +10,7 @@
     (it's only bound during per-chunk rendering). This mirrors the same
     detection used by on_stop.
 -#}
-{%- set is_tool_mode = json.tools and not has_tool_result(messages=json.messages, provider="anthropic") -%}
+{%- set is_tool_mode = json.tools and not has_tool_result(messages=json.messages | default(value=[]), provider="anthropic") -%}
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_{{ uuid }}","type":"message","role":"assistant","content":[],"model":"{{ model | default(value='claude-haiku-4-5-20251001') }}","stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{{ u::anthropic(o=usage_override, input=16, output=1) }}}}
 

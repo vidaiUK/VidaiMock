@@ -16,7 +16,7 @@ of downloading a binary, picking a free port, spawning a process, polling
 
 ```toml
 [dev-dependencies]
-vidaimock = "0.3"
+vidaimock = "0.4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

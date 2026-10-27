@@ -5,7 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-10-27
+### Changed
+- Responses report the model the client asked for (body `model`, or the
+  model in the URL for Gemini, Vertex and Bedrock). Before, OpenAI and
+  Anthropic reported the provider name (`"openai"`, `"anthropic"`) and
+  Gemini always `gemini-2.5-flash`, which broke gateway cost lookup and
+  alias tests. Azure without a model reports `gpt-4o-2024-08-06`.
+- Requests with an empty or non-JSON body now reach providers (templates see
+  `json` as `{}`) instead of being rejected; multipart bodies are parsed.
+- Default request body limit is 32 MiB (was a fixed 2 MiB).
+- Library: `ProviderConfig` and `ProviderStreamConfig` have new public fields
+  (`response_headers`, `methods`, `body_encoding`, `scenarios`,
+  `aws_payload`); code that builds them with struct literals must set them.
+
+### Removed
+- `tests/dynamic_variables_verification.py`, which tested template features
+  that no longer exist.
+
 ### Added
 - Stream templates get `chunk_index` (zero-based), `chunk_count` and
   `stream_text` (#11).
@@ -48,6 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silently producing empty output or a missing provider.
 - SSE mode: multi-line payloads get one `data:` line per line; a template that
   renders nothing sends no frame.
+- Requests without `messages` (e.g. Bedrock Titan-style `{"prompt": …}`, or
+  an empty body) get a normal response instead of a template error.
 
 ## [0.3.1] - 2026-08-04
 ### Added

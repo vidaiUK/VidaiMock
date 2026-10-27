@@ -226,7 +226,7 @@ no teardown.
 
 ```toml
 [dev-dependencies]
-vidaimock = "0.3"
+vidaimock = "0.4"
 ```
 
 ```rust

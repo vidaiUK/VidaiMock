@@ -24,7 +24,7 @@
       ]
     }
   ],
-  "modelVersion": "gemini-2.5-flash",
+  "modelVersion": "{{ model }}",
   "responseId": "mock-{{ uuid }}",
   "usageMetadata": {{ u::gemini(o=usage_override, input=10, output=8, reasoning=22) }}
 }

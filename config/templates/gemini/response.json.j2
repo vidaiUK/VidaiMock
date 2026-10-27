@@ -11,7 +11,7 @@
    Includes Gemini 2.5 fields: thoughtsTokenCount, promptTokensDetails,
    modelVersion, responseId.
 #}
-{%- set has_result = has_tool_result(messages=json.contents, provider="gemini") -%}
+{%- set has_result = has_tool_result(messages=json.contents | default(value=[]), provider="gemini") -%}
 {%- set emit_function_call = json.tools and not has_result -%}
 {
   "candidates": [
@@ -57,6 +57,6 @@
     }
   ],
   "usageMetadata": {{ u::gemini(o=usage_override, input=10, output=8, reasoning=22) }},
-  "modelVersion": "gemini-2.5-flash",
+  "modelVersion": "{{ model }}",
   "responseId": "mock-{{ uuid }}"
 }

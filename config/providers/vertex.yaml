@@ -3,8 +3,6 @@ name: vertex
 # /v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent
 # Matcher captures both project, location, and model
 matcher: "^/v1/projects/[^/]+/locations/[^/]+/publishers/google/models/[^:]+:(generate|streamGenerate)Content$"
-request_mapping:
-  model: "gemini-pro"
 stream:
   enabled: true
   # Same wire shape as Gemini streamGenerateContent?alt=sse: text-only chunks,

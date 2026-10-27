@@ -11,7 +11,7 @@
 
    Includes 2025+ fields: cache_creation, service_tier, inference_geo, stop_details.
 #}
-{%- set has_result = has_tool_result(messages=json.messages, provider="anthropic") -%}
+{%- set has_result = has_tool_result(messages=json.messages | default(value=[]), provider="anthropic") -%}
 {%- set emit_tool_use = json.tools and not has_result -%}
 {
   "id": "msg_{{ uuid }}",

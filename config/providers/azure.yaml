@@ -2,7 +2,8 @@ name: azure-openai
 # Matches /openai/deployments/{deployment-id}/chat/completions or /embeddings
 matcher: "/openai/deployments/.*/(chat/completions|embeddings)"
 request_mapping:
-  model: "azure-mock-model"
+  # Azure has no model in the body; real Azure reports the deployment's model.
+  model: "{{ json.model | default(value='gpt-4o-2024-08-06') }}"
 stream:
   enabled: true
   frame_format: raw

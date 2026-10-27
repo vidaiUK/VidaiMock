@@ -1,7 +1,7 @@
 name: "bedrock-converse"
 matcher: "^/model/.*/(converse|converse-stream)$"
 request_mapping:
-  prompt: "{{ json.messages.0.content.0.text }}"
+  prompt: "{{ json.messages.0.content.0.text | default(value='') }}"
 response_template: "bedrock/converse.json.j2"
 stream:
   enabled: true

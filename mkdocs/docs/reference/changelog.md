@@ -11,6 +11,20 @@ authoritative record of what shipped.
     The repo's `CHANGELOG.md` is currently behind the tags (it stops at
     0.1.0). This page reflects the actual released tags `v0.1.0` … `v0.2.7`.
 
+## v0.4.0 — Wire fidelity for gateway testing
+
+- Responses report the requested model on every provider, streaming or not.
+- Stream templates get `chunk_index`, `chunk_count` and `stream_text`; the
+  Responses stream numbers events without gaps and closes with the streamed
+  text (#11).
+- Stream text is JSON-escaped everywhere; Azure, Vertex and Bedrock streams
+  match the real wire formats, including Bedrock's binary event streams.
+- `response_headers` (request ids, rate limits, `retry-after`), new routes
+  (Anthropic `count_tokens`, legacy completions, stored responses, audio,
+  videos, OCR, image edits), scenario playback, `X-Vidai-Usage`,
+  `X-Vidai-Output-Tokens` and a configurable body limit.
+- Full list and behaviour changes: `CHANGELOG.md` in the repository.
+
 ## v0.2.7 — Tool-call echo & tool-streaming wire format
 
 - OpenAI chat template now **echoes the caller's declared tool name**

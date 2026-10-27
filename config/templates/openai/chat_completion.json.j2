@@ -17,7 +17,7 @@
    OpenAI-compatible endpoint gets the same tool-calling behaviour (VM-013).
 #}
 {% set has_tools = json.tools is defined and json.tools | length > 0 %}
-{% if has_tools and has_tool_result(messages=json.messages, provider="openai") %}
+{% if has_tools and has_tool_result(messages=json.messages | default(value=[]), provider="openai") %}
 {
   "id": "chatcmpl-{{ uuid }}",
   "object": "chat.completion",
@@ -74,7 +74,7 @@
       "index": 0,
       "message": {
         "role": "assistant",
-        {% set last_msg = json.messages | default(value=[]) | last %}"content": {% if generated_text %}"{{ generated_text }}"{% elif last_msg.content is string %}{{ last_msg.content | json_encode() }}{% else %}"Hello!"{% endif %}
+        {% set last_msg = json.messages | default(value=[]) | last %}"content": {% if generated_text %}"{{ generated_text }}"{% elif last_msg and last_msg.content and last_msg.content is string %}{{ last_msg.content | json_encode() }}{% else %}"Hello!"{% endif %}
       },
       "finish_reason": "stop"
     }

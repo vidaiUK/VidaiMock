@@ -261,7 +261,7 @@ pub async fn mock_handler(
             &header_map,
             &query_params,
             &path_segments,
-            &provider.name
+            &request_model(&request_json, path, &provider.name)
         );
 
         context.insert("method", method.as_str());
@@ -442,7 +442,7 @@ pub async fn streaming_handler(
                 &header_map,
                 &query_params,
                 &path_segments,
-                &provider.name
+                &request_model(&request_json, path, &provider.name)
             );
 
             // Process request_mapping
@@ -719,6 +719,25 @@ pub async fn streaming_handler(
 
     // No provider or stream config found
     (StatusCode::NOT_FOUND, "No streaming configuration found for this provider.").into_response()
+}
+
+/// The model a response should report: the request's `model` field, else the
+/// model in the URL (Gemini/Vertex `.../models/{model}:action`, Bedrock
+/// `/model/{id}/...`), else `fallback` (the provider name).
+fn request_model(request_json: &Value, path: &str, fallback: &str) -> String {
+    if let Some(m) = request_json.get("model").and_then(Value::as_str).filter(|m| !m.is_empty()) {
+        return m.to_string();
+    }
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    for (i, seg) in segments.iter().enumerate() {
+        if (*seg == "models" || *seg == "model") && i + 1 < segments.len() {
+            let id = segments[i + 1].split(':').next().unwrap_or_default();
+            if !id.is_empty() {
+                return id.to_string();
+            }
+        }
+    }
+    fallback.to_string()
 }
 
 /// Parse a request body into the template's `json` value.
