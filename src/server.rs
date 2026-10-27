@@ -148,7 +148,8 @@ pub async fn create_app(config: AppConfig, metrics_handle: Option<PrometheusHand
         app = app.route("/metrics", get(move || std::future::ready(handle.render())));
     }
 
-    app.fallback(post(mock_handler))
+    // Every method reaches the provider matcher; providers declare `methods`.
+    app.fallback(any(mock_handler))
        .layer(Extension(state))
        .layer(TraceLayer::new_for_http())
        .layer(middleware::from_fn(track_metrics))
@@ -248,6 +249,8 @@ mod tests {
             error_template: None,
             priority: 0,
             response_headers: Default::default(),
+            methods: None,
+            body_encoding: None,
         };
         registry.add_provider(config).unwrap();
         Arc::new(registry)
@@ -363,6 +366,8 @@ mod tests {
             error_template: None,
             priority: 0,
             response_headers: Default::default(),
+            methods: None,
+            body_encoding: None,
         }).unwrap();
 
         // Anthropic
@@ -377,6 +382,8 @@ mod tests {
             error_template: None,
             priority: 0,
             response_headers: Default::default(),
+            methods: None,
+            body_encoding: None,
         }).unwrap();
 
         // Gemini
@@ -391,6 +398,8 @@ mod tests {
             error_template: None,
             priority: 0,
             response_headers: Default::default(),
+            methods: None,
+            body_encoding: None,
         }).unwrap();
 
         let app = create_app(config, None, Arc::new(registry)).await;

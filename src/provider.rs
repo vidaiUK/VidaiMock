@@ -66,6 +66,23 @@ pub struct ProviderConfig {
     /// Applies to normal, streaming and error responses.
     #[serde(default)]
     pub response_headers: std::collections::BTreeMap<String, String>,
+    /// HTTP methods this provider answers. Default: `["POST"]`.
+    #[serde(default)]
+    pub methods: Option<Vec<String>>,
+    /// `base64`: the rendered body is base64 and is decoded before sending,
+    /// for binary responses such as audio. Default: sent as rendered.
+    #[serde(default)]
+    pub body_encoding: Option<String>,
+}
+
+impl ProviderConfig {
+    /// Whether this provider answers `method` (case-insensitive).
+    pub fn accepts_method(&self, method: &str) -> bool {
+        match &self.methods {
+            Some(list) => list.iter().any(|m| m.eq_ignore_ascii_case(method)),
+            None => method.eq_ignore_ascii_case("POST"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -328,10 +345,13 @@ impl ProviderRegistry {
                 if let Ok(path) = entry {
                     if path.is_file() {
                         let content = fs::read_to_string(&path)?;
-                        if let Ok(config) = serde_yaml::from_str::<ProviderConfig>(&content) {
-                            tracing::debug!("Discovered disk provider: {} ({})", config.name, path.display());
-                            all_configs.push(config);
-                            loaded_provider_names.insert(format!("providers/{}", path.file_name().unwrap().to_str().unwrap()));
+                        match serde_yaml::from_str::<ProviderConfig>(&content) {
+                            Ok(config) => {
+                                tracing::debug!("Discovered disk provider: {} ({})", config.name, path.display());
+                                all_configs.push(config);
+                                loaded_provider_names.insert(format!("providers/{}", path.file_name().unwrap().to_str().unwrap()));
+                            }
+                            Err(e) => tracing::error!("Skipping provider {}: invalid YAML: {}", path.display(), e),
                         }
                     }
                 }
@@ -344,9 +364,12 @@ impl ProviderRegistry {
                 if file.starts_with("providers/") && file.ends_with(".yaml") && !loaded_provider_names.contains(file.as_ref()) {
                     if let Some(content) = Asset::get(&file) {
                         let config_str = std::str::from_utf8(content.data.as_ref())?;
-                        if let Ok(config) = serde_yaml::from_str::<ProviderConfig>(config_str) {
-                            tracing::debug!("Discovered embedded provider: {}", config.name);
-                            all_configs.push(config);
+                        match serde_yaml::from_str::<ProviderConfig>(config_str) {
+                            Ok(config) => {
+                                tracing::debug!("Discovered embedded provider: {}", config.name);
+                                all_configs.push(config);
+                            }
+                            Err(e) => tracing::error!("Skipping embedded provider {}: invalid YAML: {}", file, e),
                         }
                     }
                 }
@@ -397,10 +420,17 @@ impl ProviderRegistry {
         Ok(())
     }
 
+    /// First provider matching `path` for a POST request.
     pub fn find_provider(&self, path: &str) -> Option<&ProviderConfig> {
+        self.find_provider_for(path, "POST")
+    }
+
+    /// First provider matching `path` that answers `method`.
+    pub fn find_provider_for(&self, path: &str, method: &str) -> Option<&ProviderConfig> {
         for (regex, idx) in &self.compiled_matchers {
-            if regex.is_match(path) {
-                return Some(&self.providers[*idx]);
+            let provider = &self.providers[*idx];
+            if regex.is_match(path) && provider.accepts_method(method) {
+                return Some(provider);
             }
         }
         None

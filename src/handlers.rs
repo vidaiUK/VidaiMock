@@ -204,11 +204,16 @@ pub async fn status_handler(
 
 pub async fn mock_handler(
     Extension(state): Extension<Arc<AppState>>,
+    method: axum::http::Method,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
     Query(query_params): Query<HashMap<String, String>>,
-    Json(request_json): Json<Value>,
+    body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    // Any method, any body: JSON, multipart (audio uploads, image edits) or
+    // none at all (GET/DELETE on id-addressed resources).
+    let request_json = parse_request_body(&headers, body).await;
+
     // Apply latency simulation (with header override support)
     apply_latency(&state.config, &headers).await;
 
@@ -241,9 +246,9 @@ pub async fn mock_handler(
     }
 
     let path = uri.path();
-    
+
     // 1. Try to find a matching provider in the registry
-    if let Some(provider) = state.registry.find_provider(path) {
+    if let Some(provider) = state.registry.find_provider_for(path, method.as_str()) {
         let mut header_map = HashMap::new();
         for (k, v) in headers.iter() {
             header_map.insert(k.to_string(), v.to_str().unwrap_or_default().to_string());
@@ -258,6 +263,8 @@ pub async fn mock_handler(
             &path_segments,
             &provider.name
         );
+
+        context.insert("method", method.as_str());
 
         // Process request_mapping: Extract variables using Tera (e.g. prompt extraction)
         for (key, expr) in &provider.request_mapping {
@@ -318,7 +325,22 @@ pub async fn mock_handler(
              return (StatusCode::NOT_FOUND, "No response template defined").into_response();
         };
 
-        let mut response = Response::new(axum::body::Body::from(rendered));
+        let body = match provider.body_encoding.as_deref() {
+            // Binary responses (audio, video): the template renders base64.
+            Some("base64") => {
+                use base64::prelude::*;
+                let compact: String = rendered.split_whitespace().collect();
+                match BASE64_STANDARD.decode(compact.as_bytes()) {
+                    Ok(bytes) => axum::body::Body::from(bytes),
+                    Err(e) => {
+                        tracing::warn!("Provider '{}': body is not valid base64: {}", provider.name, e);
+                        axum::body::Body::from(rendered)
+                    }
+                }
+            }
+            _ => axum::body::Body::from(rendered),
+        };
+        let mut response = Response::new(body);
         *response.status_mut() = status;
         response.headers_mut().insert(
             axum::http::header::CONTENT_TYPE,
@@ -691,6 +713,45 @@ pub async fn streaming_handler(
     (StatusCode::NOT_FOUND, "No streaming configuration found for this provider.").into_response()
 }
 
+/// Parse a request body into the template's `json` value.
+///
+/// - JSON -> as is
+/// - multipart/form-data -> an object of its fields; file parts become
+///   `{"filename", "content_type", "size"}`
+/// - empty or anything else -> `{}`
+async fn parse_request_body(headers: &HeaderMap, body: axum::body::Bytes) -> Value {
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    if let Ok(boundary) = multer::parse_boundary(content_type) {
+        let stream = futures::stream::once(async move { Ok::<_, std::io::Error>(body) });
+        let mut form = multer::Multipart::new(stream, boundary);
+        let mut fields = serde_json::Map::new();
+        while let Ok(Some(field)) = form.next_field().await {
+            let name = field.name().unwrap_or_default().to_string();
+            let file = field.file_name().map(str::to_string);
+            let part_type = field.content_type().map(|m| m.to_string());
+            let data = field.bytes().await.unwrap_or_default();
+            let value = match file {
+                Some(filename) => serde_json::json!({
+                    "filename": filename, "content_type": part_type, "size": data.len()
+                }),
+                None => Value::String(String::from_utf8_lossy(&data).into_owned()),
+            };
+            fields.insert(name, value);
+        }
+        return Value::Object(fields);
+    }
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Value::Object(Default::default());
+    }
+    serde_json::from_slice(&body).unwrap_or_else(|e| {
+        tracing::debug!("Request body is not JSON ({}); templates see an empty `json`", e);
+        Value::Object(Default::default())
+    })
+}
+
 /// Add the provider's `response_headers`, rendered against `ctx`.
 /// Empty values are skipped; invalid names or values are logged and skipped.
 fn apply_response_headers(
@@ -761,6 +822,10 @@ fn extract_content_value(json_str: &str) -> (serde_json::Value, bool) {
         // OpenAI format: choices[0].message.content or tool_calls
         if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
             if let Some(first_choice) = choices.get(0) {
+                // Legacy /v1/completions: choices[0].text
+                if let Some(text) = first_choice.get("text").filter(|t| t.is_string()) {
+                    return (text.clone(), false);
+                }
                 if let Some(message) = first_choice.get("message") {
                     // Check for tool_calls first
                      if let Some(tool_calls) = message.get("tool_calls") {

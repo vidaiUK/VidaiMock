@@ -1,0 +1,20 @@
+{#- Stored Responses API objects. The id is taken from the path. -#}
+{%- set rid = path_segments.2 -%}
+{%- if path_segments | length > 3 -%}
+{"object": "list", "data": [{"id": "msg_{{ uuid }}", "type": "message", "role": "user", "status": "completed", "content": [{"type": "input_text", "text": "Hello"}]}], "first_id": null, "last_id": null, "has_more": false}
+{%- elif method == "DELETE" -%}
+{"id": "{{ rid }}", "object": "response", "deleted": true}
+{%- else -%}
+{
+  "id": "{{ rid }}",
+  "object": "response",
+  "created_at": {{ timestamp }},
+  "status": "completed",
+  "model": "gpt-4o-mini",
+  "output": [
+    {"id": "msg_{{ uuid }}", "type": "message", "role": "assistant", "status": "completed",
+     "content": [{"type": "output_text", "text": "This is a mock response from VidaiMock Responses API.", "annotations": []}]}
+  ],
+  "usage": {"input_tokens": 12, "output_tokens": 10, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 22}
+}
+{%- endif %}

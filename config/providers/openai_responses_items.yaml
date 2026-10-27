@@ -1,0 +1,9 @@
+name: "openai-responses-items"
+# GET /v1/responses/{id}, DELETE /v1/responses/{id},
+# GET /v1/responses/{id}/input_items. Creating stays in openai_responses.yaml.
+matcher: "^/v1/responses/[^/]+(/input_items)?$"
+methods: ["GET", "DELETE"]
+priority: 10
+response_template: "openai/responses_item.json.j2"
+response_headers:
+  x-request-id: "req_{{ uuid | replace(from='-', to='') }}"

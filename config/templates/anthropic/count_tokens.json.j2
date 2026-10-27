@@ -1,0 +1,6 @@
+{#- Anthropic /v1/messages/count_tokens: a rough estimate, ~4 chars per token. -#}
+{%- set chars = json.messages | default(value=[]) | json_encode() | length -%}
+{%- if json.system %}{% set n = json.system | json_encode() | length %}{% set chars = chars + n %}{% endif -%}
+{%- if json.tools %}{% set n = json.tools | json_encode() | length %}{% set chars = chars + n %}{% endif -%}
+{%- set estimate = chars / 4 -%}
+{"input_tokens": {{ estimate | round(method="ceil") | int }}}

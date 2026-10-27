@@ -1,0 +1,25 @@
+{#- /v1/audio/transcriptions and /translations. Usage follows the model:
+    whisper-1 bills by duration, gpt-4o-*-transcribe by tokens. -#}
+{%- set f = json.response_format | default(value="json") -%}
+{%- set model = json.model | default(value="whisper-1") -%}
+{%- set text = "This is a mock transcription from VidaiMock." -%}
+{%- if f == "text" -%}
+{{ text }}
+{%- elif f == "srt" -%}
+1
+00:00:00,000 --> 00:00:02,500
+{{ text }}
+{%- elif f == "vtt" -%}
+WEBVTT
+
+00:00:00.000 --> 00:00:02.500
+{{ text }}
+{%- elif f == "verbose_json" -%}
+{"task": "{% if path_segments.2 == 'translations' %}translate{% else %}transcribe{% endif %}", "language": "{{ json.language | default(value='english') }}", "duration": 2.5, "text": "{{ text }}", "segments": [{"id": 0, "seek": 0, "start": 0.0, "end": 2.5, "text": "{{ text }}", "tokens": [50364, 639, 307, 257], "temperature": 0.0, "avg_logprob": -0.2, "compression_ratio": 1.1, "no_speech_prob": 0.01}], "usage": {"type": "duration", "seconds": 3}}
+{%- elif path_segments.2 == "translations" -%}
+{"text": "{{ text }}"}
+{%- elif model is containing("transcribe") -%}
+{"text": "{{ text }}", "usage": {"type": "tokens", "input_tokens": 40, "input_token_details": {"text_tokens": 0, "audio_tokens": 40}, "output_tokens": 9, "total_tokens": 49}}
+{%- else -%}
+{"text": "{{ text }}", "usage": {"type": "duration", "seconds": 3}}
+{%- endif -%}

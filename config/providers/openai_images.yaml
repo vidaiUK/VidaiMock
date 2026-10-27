@@ -1,3 +1,7 @@
 name: "openai-images"
-matcher: "^/v1/images/generations$"
+# /v1/images/generations, /edits (multipart) and /variations (multipart).
+matcher: "^/v1/images/(generations|edits|variations)$"
+error_template: "openai/error.json.j2"
 response_template: "openai/images_generations.json.j2"
+response_headers:
+  x-request-id: "req_{{ uuid | replace(from='-', to='') }}"

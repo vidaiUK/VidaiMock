@@ -71,12 +71,44 @@ curl http://localhost:8100/v1/embeddings -H "Content-Type: application/json" \
 
 Returns the standard `data[].embedding` shape with float vectors.
 
-## Images — `POST /v1/images/generations`
+## Images — `POST /v1/images/generations`, `/edits`, `/variations`
 
 ```bash
 curl http://localhost:8100/v1/images/generations -H "Content-Type: application/json" \
   -d '{"model": "dall-e-2", "prompt": "a red circle", "n": 1}'
 ```
+
+Returns `n` images. `gpt-image-*` models get `b64_json` and a token `usage`
+block; `dall-e-*` get `url` (or `b64_json` when asked) and no usage. `/edits`
+and `/variations` take the usual multipart upload.
+
+## Audio — `POST /v1/audio/speech`, `/transcriptions`, `/translations`
+
+`/speech` returns a short silent clip (`mp3` by default; `wav` and `pcm` are
+valid files too) with the matching content type. `/transcriptions` and
+`/translations` take a multipart upload and honour `response_format`
+(`json`, `text`, `verbose_json`, `srt`, `vtt`). Usage follows the model:
+`whisper-1` reports duration, `gpt-4o-*-transcribe` reports tokens.
+
+```bash
+curl http://localhost:8100/v1/audio/transcriptions -F model=whisper-1 -F file=@clip.wav
+```
+
+## Videos — `/v1/videos`
+
+`POST` creates a `queued` job; `GET /v1/videos/{id}` returns it `completed`;
+`GET /v1/videos` lists; `DELETE` deletes; `GET /v1/videos/{id}/content`
+returns MP4 bytes.
+
+## Legacy completions — `POST /v1/completions`
+
+`text_completion` responses, streaming and non-streaming (with
+`stream_options.include_usage`).
+
+## Stored responses — `GET`/`DELETE /v1/responses/{id}`
+
+Returns the stored response object (the id is taken from the path), the
+deletion object, or `GET /v1/responses/{id}/input_items` as a list.
 
 ## Moderations — `POST /v1/moderations`
 

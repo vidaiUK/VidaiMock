@@ -77,6 +77,24 @@ is not sent. A `content-type` entry overrides the default. The bundled OpenAI
 and Anthropic providers use this to send request ids, rate-limit headers, and
 `retry-after` on 429/503.
 
+### `methods`
+
+HTTP methods the provider answers, e.g. `["GET", "DELETE"]`. Default: `["POST"]`.
+Templates can branch on the `method` variable.
+
+### `body_encoding`
+
+`base64`: the rendered body is base64 and is decoded before sending, for binary
+responses such as audio or video. Pair it with a `content-type` in
+`response_headers`.
+
+### Request bodies
+
+Templates see the request body as `json`. JSON bodies are passed through;
+`multipart/form-data` becomes an object of its fields, with file parts as
+`{"filename", "content_type", "size"}` (multipart sends numbers as strings, so
+use `| int`). An empty or non-JSON body is `{}`.
+
 ### `stream`
 
 Present (and `enabled: true`) to make the provider stream. `lifecycle`
